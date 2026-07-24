@@ -1,0 +1,52 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime    @default(now())
+  characters   Character[]
+  messages     Message[]
+}
+
+model Character {
+  id                 String    @id @default(uuid())
+  ownerId            String
+  owner              User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name               String
+  tagline            String
+  avatarEmoji        String    @default("🌸")
+  avatarUrl          String? // path under /uploads if an image avatar was set
+  accentColor        String    @default("#c9a227")
+  personality        String // short trait list, shown to the user
+  backstory          String // longer context, injected into the model prompt
+  greeting           String // first message the character opens with
+  memorySummary      String    @default("") // running summary of older conversation, folded in as memory
+  summarizedThrough  Int       @default(0) // how many messages are already folded into memorySummary
+  isExplicit         Boolean   @default(false) // whether this is an explicit/NSFW character
+  createdAt          DateTime  @default(now())
+  messages           Message[]
+
+  @@index([ownerId])
+}
+
+model Message {
+  id          String    @id @default(uuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String // "user" | "assistant"
+  content     String
+  createdAt   DateTime  @default(now())
+
+  @@index([characterId, userId, createdAt])
+}

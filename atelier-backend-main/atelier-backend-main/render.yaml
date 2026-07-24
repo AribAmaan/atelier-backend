@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: atelier-backend
+    runtime: node
+    plan: free
+    healthCheckPath: /api/health
+    # prisma/migrations/ is committed (see 0_initial_schema/), so deploys
+    # apply tracked migrations in order via `migrate deploy` rather than
+    # `db push`, which would silently ignore the migration history table.
+    buildCommand: "npm install && npx prisma migrate deploy && npm run build"
+    startCommand: "npm run start"
+    disk:
+      # Avatar uploads are written to public/uploads/avatars on local disk
+      # (see src/routes/avatar.ts) — a persistent disk is required so
+      # uploads survive restarts/deploys.
+      name: atelier-uploads
+      mountPath: /opt/render/project/src/public/uploads
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: atelier-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      # Set this to your Netlify site URL(s) after the frontend is deployed,
+      # comma-separated if you have more than one (prod + deploy previews).
+      # e.g. "https://your-site.netlify.app"
+      - key: FRONTEND_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_API_KEY_2
+        sync: false
+      - key: GROQ_MODEL
+        value: "llama-3.3-70b-versatile"
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY_2
+        sync: false
+      - key: NVIDIA_MODEL
+        value: "meta/llama-3.1-70b-instruct"
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: CEREBRAS_MODEL
+        value: "llama-3.3-70b"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NODE_ENV
+        value: "production"
+
+databases:
+  - name: atelier-db
+    plan: free
