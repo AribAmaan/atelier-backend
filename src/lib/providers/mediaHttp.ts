@@ -8,14 +8,32 @@ export function imageTimeoutMs(): number {
 
 /**
  * Cloudflare Workers AI gets its OWN deadline, independent of
- * IMAGE_GEN_TIMEOUT_SECONDS. FLUX.2 Klein is queued on shared GPUs and a cold
- * or busy request regularly takes longer than 15s; a stale/low shared value
- * (e.g. IMAGE_GEN_TIMEOUT_SECONDS=15 left in the Render dashboard) used to
- * abort every Cloudflare call before it could finish. Default 60s, range 10-170s.
+ * IMAGE_GEN_TIMEOUT_SECONDS. FLUX.2 Klein 4B normally answers in ~3-10s; if it
+ * has not answered in 20s it is hung/queued, and waiting longer only makes the
+ * user wait longer (a 60s default made every failed call cost a full minute
+ * before the fallback even started). Default 20s, range 10-170s.
  */
 export function cloudflareImageTimeoutMs(): number {
-  const seconds = Number(process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS ?? "60");
-  return Number.isFinite(seconds) && seconds >= 10 && seconds <= 170 ? seconds * 1000 : 60_000;
+  const seconds = Number(process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS ?? "20");
+  return Number.isFinite(seconds) && seconds >= 10 && seconds <= 170 ? seconds * 1000 : 20_000;
+}
+
+/**
+ * Pollinations deadline. Never lower than 30s even if a stale
+ * IMAGE_GEN_TIMEOUT_SECONDS=15 is sitting in the Render dashboard (that value
+ * was killing Pollinations calls that would have succeeded).
+ */
+export function pollinationsImageTimeoutMs(): number {
+  return Math.max(imageTimeoutMs(), 30_000);
+}
+
+/**
+ * Hedge delay: if the current provider has not answered after this long, the
+ * next provider is started in parallel (first valid image wins). 0 disables.
+ */
+export function imageHedgeMs(): number {
+  const seconds = Number(process.env.IMAGE_HEDGE_SECONDS ?? "8");
+  return Number.isFinite(seconds) && seconds >= 0 && seconds <= 60 ? seconds * 1000 : 8_000;
 }
 
 export async function requestMediaResource(

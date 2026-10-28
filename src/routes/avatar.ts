@@ -8,7 +8,7 @@ import { getCurrentUserId } from "../lib/auth";
 import sharp from "sharp";
 import { inspectImage } from "../lib/imageValidation";
 import { finalizeGeneratedImage } from "../lib/finalizeImage";
-import { imageTimeoutMs, cloudflareImageTimeoutMs, requestMediaResource } from "../lib/providers/mediaHttp";
+import { imageTimeoutMs, cloudflareImageTimeoutMs, pollinationsImageTimeoutMs, imageHedgeMs, requestMediaResource } from "../lib/providers/mediaHttp";
 import { uploadAvatarBuffer } from "../lib/b2";
 import { generateCloudflareImage, isCloudflareConfigured } from "../lib/providers/cloudflare";
 import { generateDicebearAvatar } from "../lib/providers/dicebear";
@@ -38,6 +38,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 const POLLINATIONS_IMAGE_URL = "https://image.pollinations.ai/prompt";
 const POLLINATIONS_SAFE_IMAGE_MODEL = "lykon/dreamshaper-8-lcm";
 const POLLINATIONS_EXPLICIT_IMAGE_MODEL = "vendouple/uncensored-image-enhanced";
+
+// Cloudflare had NO breaker: when Klein hung, every request re-paid the full
+// timeout. One timeout now skips Cloudflare for 5 min (auto-resets); a
+// rate-limit/quota error skips it for 60s (or the provider's own retry hint).
+const cloudflareBreaker = new ProviderBreaker("Cloudflare", { cooldownSeconds: 60, timeoutTripThreshold: 1, timeoutCooldownSeconds: 300 }, "CLOUDFLARE_IMAGE");
 
 const pollinationsBreaker = new ProviderBreaker("Pollinations", { cooldownSeconds: 30, timeoutTripThreshold: 2, timeoutCooldownSeconds: 15 }, "POLLINATIONS");
 
@@ -203,7 +208,7 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
   await acquireImageGenSlot();
   try {
     const { prompt, isExplicit, kind } = data;
-    const timeoutMs = imageTimeoutMs();
+    const timeoutMs = pollinationsImageTimeoutMs();
 
     const pollinationsFn = kind === "avatar"
       ? () => withPollinationsRetry(() => generatePollinationsAvatar({ isExplicit }, prompt, timeoutMs))
@@ -237,6 +242,7 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
     };
     const cloudflareAttempt: ProviderAttempt = {
       name: "cloudflare",
+      breaker: cloudflareBreaker,
       run: () => generateCloudflareImage(
         prompt,
         cloudflareImageTimeoutMs(),
@@ -257,37 +263,84 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
 
     const errors: string[] = [];
 
-    for (const attempt of chain) {
-      if (attempt.name === "cloudflare" && !isCloudflareConfigured()) {
-        errors.push("cloudflare: not configured");
-        continue;
-      }
-      if (attempt.breaker?.isOpen()) {
-        errors.push(`${attempt.name}: circuit breaker open, skipped`);
-        continue;
-      }
-      const startedAt = Date.now();
-      try {
-        const bytes = await attempt.run();
-        // Validate while still inside the provider attempt so corrupt/HTML
-        // success responses trigger fallback instead of failing during upload.
-        await validateGeneratedImage(bytes);
-        attempt.breaker?.reset();
-        console.log(`[avatar] ${attempt.name} ok in ${Date.now() - startedAt}ms`);
-        return { bytes, provider: attempt.name };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[avatar] ${attempt.name} failed after ${Date.now() - startedAt}ms: ${msg.slice(0, 300)}`);
-        errors.push(`${attempt.name}: ${msg}`);
-        // withPollinationsRetry() already trips its own breaker
-        // internally on a final rate-limit/timeout failure; avoid
-        // double-tripping it here.
-        if (attempt.breaker && attempt.name !== "pollinations") {
-          if (isRateLimitError(err)) attempt.breaker.trip(err);
-          else if (isTimeoutError(err)) attempt.breaker.recordTimeout();
+    // Hedged chain: providers are still tried in priority order, but if the
+    // current one hasn't answered within IMAGE_HEDGE_SECONDS (default 8s) the
+    // next one starts IN PARALLEL and the first valid image wins. A fast
+    // failure starts the next provider immediately. Worst case is now ~hedge +
+    // fallback time instead of (timeout of the first) + (timeout of the next).
+    const hedgeMs = imageHedgeMs();
+    const winner = await new Promise<ImageGenJobResult | null>((resolve) => {
+      let next = 0;
+      let inFlight = 0;
+      let settled = false;
+      let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (r: ImageGenJobResult | null) => {
+        if (settled) return;
+        settled = true;
+        if (hedgeTimer) clearTimeout(hedgeTimer);
+        resolve(r);
+      };
+
+      const startNext = () => {
+        if (settled) return;
+        if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = undefined; }
+        while (next < chain.length) {
+          const attempt = chain[next++];
+          if (attempt.name === "cloudflare" && !isCloudflareConfigured()) {
+            errors.push("cloudflare: not configured");
+            continue;
+          }
+          if (attempt.breaker?.isOpen()) {
+            errors.push(`${attempt.name}: circuit breaker open, skipped`);
+            continue;
+          }
+          inFlight++;
+          const startedAt = Date.now();
+          (async () => {
+            const bytes = await attempt.run();
+            // Validate inside the attempt so corrupt/HTML success responses
+            // trigger fallback instead of failing later during upload.
+            await validateGeneratedImage(bytes);
+            return bytes;
+          })().then(
+            (bytes) => {
+              inFlight--;
+              attempt.breaker?.reset();
+              if (settled) {
+                console.log(`[avatar] ${attempt.name} finished after ${Date.now() - startedAt}ms but another provider already won`);
+                return;
+              }
+              console.log(`[avatar] ${attempt.name} ok in ${Date.now() - startedAt}ms`);
+              finish({ bytes, provider: attempt.name });
+            },
+            (err) => {
+              inFlight--;
+              const msg = err instanceof Error ? err.message : String(err);
+              console.warn(`[avatar] ${attempt.name} failed after ${Date.now() - startedAt}ms: ${msg.slice(0, 300)}`);
+              errors.push(`${attempt.name}: ${msg}`);
+              // withPollinationsRetry() already trips its own breaker
+              // internally; avoid double-tripping it here.
+              if (attempt.breaker && attempt.name !== "pollinations") {
+                if (isRateLimitError(err)) attempt.breaker.trip(err);
+                else if (isTimeoutError(err)) attempt.breaker.recordTimeout();
+              }
+              if (settled) return;
+              if (next < chain.length) startNext();          // fast-fail: go straight to the next provider
+              else if (inFlight === 0) finish(null);          // nothing left anywhere
+            }
+          );
+          // More providers waiting? Hedge after hedgeMs if this one is slow.
+          if (hedgeMs > 0 && next < chain.length) hedgeTimer = setTimeout(startNext, hedgeMs);
+          return;
         }
-      }
-    }
+        // Ran out of providers without starting one.
+        if (inFlight === 0) finish(null);
+      };
+
+      startNext();
+    });
+    if (winner) return winner;
 
     // Best-effort final fallback for avatars only (DiceBear has no
     // background/scene equivalent): every real AI provider failed, so
@@ -317,7 +370,7 @@ export function startImageGenWorker(): void {
 }
 
 // Printed once at boot so the Render logs show the timeouts actually in effect.
-console.log(`[image-gen] timeouts: default=${imageTimeoutMs() / 1000}s cloudflare=${cloudflareImageTimeoutMs() / 1000}s order=${process.env.IMAGE_PROVIDER_ORDER || "cloudflare,pollinations"}`);
+console.log(`[image-gen] timeouts: default=${imageTimeoutMs() / 1000}s pollinations=${pollinationsImageTimeoutMs() / 1000}s cloudflare=${cloudflareImageTimeoutMs() / 1000}s hedge=${imageHedgeMs() / 1000}s order=${process.env.IMAGE_PROVIDER_ORDER || "cloudflare,pollinations"}`);
 
 // ---------------------------------------------------------------------------
 // Routes

@@ -52,7 +52,9 @@ services:
       - key: CLOUDFLARE_IMAGE_MODEL
         value: "@cf/black-forest-labs/flux-2-klein-4b"
       - key: CLOUDFLARE_IMAGE_TIMEOUT_SECONDS
-        value: "60"
+        value: "20"
+      - key: IMAGE_HEDGE_SECONDS
+        value: "8"
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_API_KEY_2

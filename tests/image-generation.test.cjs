@@ -173,11 +173,11 @@ test('Cloudflare timeout ignores a stale IMAGE_GEN_TIMEOUT_SECONDS=15 and has it
   const { cloudflareImageTimeoutMs } = require('../dist/lib/providers/mediaHttp');
   process.env.IMAGE_GEN_TIMEOUT_SECONDS = '15';
   delete process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS;
-  assert.equal(cloudflareImageTimeoutMs(), 60000);
+  assert.equal(cloudflareImageTimeoutMs(), 20000);
   process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS = '90';
   assert.equal(cloudflareImageTimeoutMs(), 90000);
   process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS = 'abc';
-  assert.equal(cloudflareImageTimeoutMs(), 60000);
+  assert.equal(cloudflareImageTimeoutMs(), 20000);
   delete process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS;
 });
 
@@ -188,4 +188,33 @@ test('Klein request omits guidance unless CLOUDFLARE_IMAGE_GUIDANCE is set', asy
     return Response.json({ success: true, result: { image: bytes.toString('base64') } });
   };
   await generateCloudflareImage(job.prompt, 1000, { width: 1024, height: 1024 });
+});
+
+test('hung Cloudflare is hedged: Pollinations starts after the hedge delay and wins fast', async () => {
+  process.env.IMAGE_HEDGE_SECONDS = '1';
+  const bytes = await png(); const urls = [];
+  global.fetch = (url) => {
+    urls.push(url);
+    if (/api.cloudflare.com/.test(url)) return new Promise(() => {}); // hangs forever
+    return Promise.resolve(new Response(bytes));
+  };
+  const t0 = Date.now();
+  const result = await processImageGen(job);
+  const took = Date.now() - t0;
+  assert.equal(result.provider, 'pollinations');
+  assert.ok(took >= 900 && took < 5000, `expected ~1s hedge, took ${took}ms`);
+  delete process.env.IMAGE_HEDGE_SECONDS;
+});
+
+test('Cloudflare rate-limit opens its breaker so the next request skips it', async () => {
+  const bytes = await png(); const urls = [];
+  global.fetch = async (url) => {
+    urls.push(url);
+    if (/api.cloudflare.com/.test(url)) return new Response('Too Many Requests', { status: 429 });
+    return new Response(bytes);
+  };
+  assert.equal((await processImageGen(job)).provider, 'pollinations');
+  urls.length = 0;
+  assert.equal((await processImageGen(job)).provider, 'pollinations');
+  assert.ok(urls.every(u => /pollinations/.test(u)), 'Cloudflare should be skipped while its breaker is open');
 });
