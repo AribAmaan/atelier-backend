@@ -14,6 +14,10 @@ const MODEL = process.env.CLOUDFLARE_IMAGE_MODEL || "@cf/black-forest-labs/flux-
 // Guidance is supported by FLUX.2 Klein and Leonardo Phoenix. The model-
 // specific request builder below only includes it for compatible families.
 const GUIDANCE = Number(process.env.CLOUDFLARE_IMAGE_GUIDANCE || "7");
+// Klein is a distilled model (steps fixed at 4); guidance is optional and only
+// sent when CLOUDFLARE_IMAGE_GUIDANCE is set explicitly, so we don't push a
+// high value (7) at a model tuned for low guidance.
+const KLEIN_GUIDANCE_EXPLICIT = Boolean(process.env.CLOUDFLARE_IMAGE_GUIDANCE);
 
 type CloudflareImageSize = { width?: number; height?: number };
 
@@ -30,7 +34,7 @@ function buildKleinMultipartBody(prompt: string, size?: CloudflareImageSize): Fo
   const form = new FormData();
   form.append("prompt", prompt);
 
-  if (Number.isFinite(GUIDANCE)) {
+  if (KLEIN_GUIDANCE_EXPLICIT && Number.isFinite(GUIDANCE)) {
     form.append("guidance", String(GUIDANCE));
   }
   if (size?.width) form.append("width", String(size.width));

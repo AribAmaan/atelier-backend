@@ -100,20 +100,21 @@ test('invalid timeout environment values recover to the default', () => {
 
 test('valid first provider image wins without calling fallback', async () => {
   const bytes = await png(); let calls = 0;
-  global.fetch = async () => { calls++; return new Response(bytes); };
-  assert.equal((await processImageGen(job)).provider, 'pollinations');
+  global.fetch = async () => { calls++; return new Response(bytes, { headers: { 'content-type': 'image/png' } }); };
+  assert.equal((await processImageGen(job)).provider, 'cloudflare');
   assert.equal(calls, 1);
 });
 
-test('HTML success from first provider triggers Cloudflare fallback', async () => {
+test('HTML success from Cloudflare (first) triggers Pollinations fallback', async () => {
   const bytes = await png(); const urls = [];
   global.fetch = async url => {
     urls.push(url);
-    return urls.length === 1 ? new Response('<html>upstream error</html>') : Response.json({ result: { image: bytes.toString('base64') } });
+    return urls.length === 1 ? new Response('<html>upstream error</html>') : new Response(bytes);
   };
   const result = await processImageGen(job);
-  assert.equal(result.provider, 'cloudflare');
-  assert.match(urls[1], /api.cloudflare.com/);
+  assert.equal(result.provider, 'pollinations');
+  assert.match(urls[0], /api.cloudflare.com/);
+  assert.match(urls[1], /pollinations/);
 });
 
 test('invalid Cloudflare image bytes trigger DiceBear fallback', async () => {
@@ -166,4 +167,25 @@ test('registration rejects email addresses that exceed the existing database col
   const suffix = '@' + 'b'.repeat(60) + '.' + 'c'.repeat(60) + '.com';
   assert.equal(validEmail('a'.repeat(191 - suffix.length) + suffix), true);
   assert.equal(validEmail('a'.repeat(192 - suffix.length) + suffix), false);
+});
+
+test('Cloudflare timeout ignores a stale IMAGE_GEN_TIMEOUT_SECONDS=15 and has its own default', () => {
+  const { cloudflareImageTimeoutMs } = require('../dist/lib/providers/mediaHttp');
+  process.env.IMAGE_GEN_TIMEOUT_SECONDS = '15';
+  delete process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS;
+  assert.equal(cloudflareImageTimeoutMs(), 60000);
+  process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS = '90';
+  assert.equal(cloudflareImageTimeoutMs(), 90000);
+  process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS = 'abc';
+  assert.equal(cloudflareImageTimeoutMs(), 60000);
+  delete process.env.CLOUDFLARE_IMAGE_TIMEOUT_SECONDS;
+});
+
+test('Klein request omits guidance unless CLOUDFLARE_IMAGE_GUIDANCE is set', async () => {
+  const bytes = await png();
+  global.fetch = async (url, init) => {
+    assert.equal(init.body.get('guidance'), null);
+    return Response.json({ success: true, result: { image: bytes.toString('base64') } });
+  };
+  await generateCloudflareImage(job.prompt, 1000, { width: 1024, height: 1024 });
 });

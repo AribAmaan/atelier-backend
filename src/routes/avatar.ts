@@ -7,7 +7,7 @@ import { prisma } from "../lib/db";
 import { getCurrentUserId } from "../lib/auth";
 import sharp from "sharp";
 import { inspectImage } from "../lib/imageValidation";
-import { imageTimeoutMs, requestMediaResource } from "../lib/providers/mediaHttp";
+import { imageTimeoutMs, cloudflareImageTimeoutMs, requestMediaResource } from "../lib/providers/mediaHttp";
 import { uploadAvatarBuffer } from "../lib/b2";
 import { generateCloudflareImage, isCloudflareConfigured } from "../lib/providers/cloudflare";
 import { generateDicebearAvatar } from "../lib/providers/dicebear";
@@ -40,6 +40,21 @@ const POLLINATIONS_EXPLICIT_IMAGE_MODEL = "vendouple/uncensored-image-enhanced";
 
 const pollinationsBreaker = new ProviderBreaker("Pollinations", { cooldownSeconds: 30, timeoutTripThreshold: 2, timeoutCooldownSeconds: 15 }, "POLLINATIONS");
 
+// Pollinations' free "Classic" API answers 503 (at capacity) and 402 (1 image /
+// 45s / IP) when busy. Neither matched the shared rate-limit matcher, so the
+// breaker never opened and every request wasted a round-trip on it first.
+function isPollinationsBusy(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /API error (402|503)|FREE_LIMIT|SERVICE_UNAVAILABLE/i.test(msg);
+}
+
+function pollinationsRetryHint(err: unknown): unknown {
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = /retry after\s+([\d.]+)\s*s/i.exec(msg);
+  // circuitBreaker.trip() understands "retry in Ns"
+  return new Error(m ? `retry in ${m[1]}s` : msg);
+}
+
 async function withPollinationsRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -51,7 +66,7 @@ async function withPollinationsRetry<T>(fn: () => Promise<T>, maxAttempts = 3): 
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      const isRateLimit = isRateLimitError(err);
+      const isRateLimit = isRateLimitError(err) || isPollinationsBusy(err);
       const isTimeout = isTimeoutError(err);
       if ((isRateLimit || isTimeout) && pollinationsBreaker.isOpen()) {
         throw err;
@@ -59,7 +74,7 @@ async function withPollinationsRetry<T>(fn: () => Promise<T>, maxAttempts = 3): 
       const isQueueFull = /429|Too Many Requests|Queue full/i.test(msg);
       if (!isQueueFull || attempt === maxAttempts) {
         if (isRateLimit) {
-          pollinationsBreaker.trip(err);
+          pollinationsBreaker.trip(pollinationsRetryHint(err));
         } else if (isTimeout) {
           pollinationsBreaker.recordTimeout();
         }
@@ -223,12 +238,21 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
       name: "cloudflare",
       run: () => generateCloudflareImage(
         prompt,
-        timeoutMs,
-        kind === "avatar" ? { width: 1024, height: 1024 } : { width: 1920, height: 1080 }
+        cloudflareImageTimeoutMs(),
+        // 1280x720 is ~2.3x fewer pixels than 1920x1080 (faster, cheaper);
+        // the background route upscales to 1920x1080 with sharp afterwards.
+        kind === "avatar" ? { width: 1024, height: 1024 } : { width: 1280, height: 720 }
       ),
     };
 
-    const chain: ProviderAttempt[] = [pollinationsAttempt, cloudflareAttempt];
+    // Cloudflare first (when configured): Pollinations' free tier is capped at
+    // 1 image/45s/IP and is usually at capacity, so it fails most calls.
+    // Override with IMAGE_PROVIDER_ORDER=pollinations,cloudflare if desired.
+    const chain: ProviderAttempt[] = (process.env.IMAGE_PROVIDER_ORDER || "cloudflare,pollinations")
+      .split(",").map((n) => n.trim().toLowerCase())
+      .map((n) => (n === "cloudflare" ? cloudflareAttempt : n === "pollinations" ? pollinationsAttempt : null))
+      .filter((a): a is ProviderAttempt => a !== null);
+    if (!chain.length) chain.push(cloudflareAttempt, pollinationsAttempt);
 
     const errors: string[] = [];
 
@@ -241,16 +265,18 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
         errors.push(`${attempt.name}: circuit breaker open, skipped`);
         continue;
       }
+      const startedAt = Date.now();
       try {
         const bytes = await attempt.run();
         // Validate while still inside the provider attempt so corrupt/HTML
         // success responses trigger fallback instead of failing during upload.
         await validateGeneratedImage(bytes);
         attempt.breaker?.reset();
+        console.log(`[avatar] ${attempt.name} ok in ${Date.now() - startedAt}ms`);
         return { bytes, provider: attempt.name };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[avatar] ${attempt.name} failed: ${msg.slice(0, 300)}`);
+        console.warn(`[avatar] ${attempt.name} failed after ${Date.now() - startedAt}ms: ${msg.slice(0, 300)}`);
         errors.push(`${attempt.name}: ${msg}`);
         // withPollinationsRetry() already trips its own breaker
         // internally on a final rate-limit/timeout failure; avoid
@@ -288,6 +314,9 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
 export function startImageGenWorker(): void {
   console.log("[image-queue] Using in-memory queue (BullMQ Postgres backend disabled)");
 }
+
+// Printed once at boot so the Render logs show the timeouts actually in effect.
+console.log(`[image-gen] timeouts: default=${imageTimeoutMs() / 1000}s cloudflare=${cloudflareImageTimeoutMs() / 1000}s order=${process.env.IMAGE_PROVIDER_ORDER || "cloudflare,pollinations"}`);
 
 // ---------------------------------------------------------------------------
 // Routes
