@@ -17,6 +17,7 @@ import {
 } from "../lib/auth";
 import { checkRateLimit, getClientIp } from "../lib/rateLimit";
 import { sendMail } from "../lib/mailer";
+import { anonymizeUserInTx } from "../lib/accountDeletion";
 import { uploadAvatarBuffer } from "../lib/b2";
 import { processImageGen } from "./avatar";
 
@@ -32,7 +33,6 @@ const ALLOWED_AVATAR_TYPES: Record<string, string> = {
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 const avatarUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_AVATAR_BYTES, files: 1, fields: 10, parts: 12 } });
 
-const MINIMUM_AGE_YEARS = 18;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -48,6 +48,28 @@ async function verifyGoogleCredential(credential: string) {
   const payload = ticket.getPayload();
   if (!payload) throw new Error("Empty Google token payload");
   return payload;
+}
+
+// Links a Google identity to an account found by email. If that account's
+// email was never verified, whoever registered it may not own the address
+// (registration doesn't require verification), so a pre-registered password
+// and any live sessions would survive the real owner's Google sign-in. In that
+// case rotate passwordHash to an unknown random value: the old password stops
+// working and every existing session token (bound to the hash through
+// credentialVersion) is invalidated. The real owner can set a password later
+// through "forgot password".
+async function linkGoogleToExistingAccount(
+  existing: { id: string; emailVerified: boolean },
+  googleId: string
+) {
+  const data: { googleId: string; emailVerified: true; passwordHash?: string } = {
+    googleId,
+    emailVerified: true,
+  };
+  if (!existing.emailVerified) {
+    data.passwordHash = await hashPassword(crypto.randomBytes(32).toString("hex"));
+  }
+  return prisma.user.update({ where: { id: existing.id }, data });
 }
 
 // Shared by /register and /google/complete — both need the same 18+ /
@@ -190,10 +212,7 @@ router.post("/google", asyncHandler(async (req, res) => {
       if (existingByEmail.deletedAt || (existingByEmail.googleId && existingByEmail.googleId !== googleId)) {
         return res.status(401).json({ error: "Unable to sign in to this account." });
       }
-      user = await prisma.user.update({
-        where: { id: existingByEmail.id },
-        data: { googleId, emailVerified: true },
-      });
+      user = await linkGoogleToExistingAccount(existingByEmail, googleId);
     }
   }
 
@@ -273,10 +292,7 @@ router.post("/google/complete", asyncHandler(async (req, res) => {
       if (existingByEmail.deletedAt || (existingByEmail.googleId && existingByEmail.googleId !== googleId)) {
         return res.status(401).json({ error: "Unable to sign in to this account." });
       }
-      user = await prisma.user.update({
-        where: { id: existingByEmail.id },
-        data: { googleId, emailVerified: true },
-      });
+      user = await linkGoogleToExistingAccount(existingByEmail, googleId);
     }
   }
 
@@ -443,7 +459,9 @@ router.delete("/me", asyncHandler(async (req, res) => {
   const userId = await getCurrentUserId(req);
   if (!userId) return res.status(401).json({ error: "Not signed in." });
 
-  await prisma.user.delete({ where: { id: userId } });
+  // Anonymize rather than hard-delete: PaymentOrder cascades from User and
+  // payment records must be retained. Same path as the retention job.
+  await prisma.$transaction(tx => anonymizeUserInTx(tx, userId));
 
   clearSessionCookie(res);
   return res.json({ ok: true });
@@ -458,7 +476,7 @@ router.post("/avatar", requireUser, avatarUpload.single("avatar"), asyncHandler(
   if (!file) {
     return res.status(400).json({ error: "No image file was sent." });
   }
-  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.mimetype)) {
+  if (!ALLOWED_AVATAR_TYPES[file.mimetype]) {
     return res.status(400).json({ error: "Use a PNG, JPEG, WebP, or GIF image." });
   }
 
@@ -549,25 +567,33 @@ router.post("/forgot-password", asyncHandler(async (req, res) => {
   const genericResponse = { ok: true, message: "If that email has an account, a reset link is on its way." };
   if (!email) return res.json(genericResponse);
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (user && !user.deletedAt) {
-    await prisma.passwordResetToken.updateMany({
-      where: { userId: user.id, usedAt: null, expiresAt: { gt: new Date() } },
-      data: { usedAt: new Date() },
-    });
-    const raw = issueRawToken();
-    await prisma.passwordResetToken.create({
-      data: { userId: user.id, tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS) },
-    });
-    const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:3000").split(",")[0].trim();
-    const link = `${frontendUrl}/reset-password?token=${raw}`;
-    await sendMail(
-      user.email,
-      "Reset your Rolichat password",
-      `<p>Someone requested a password reset for this account. If that was you, set a new password:</p><p><a href="${link}">${link}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
-      `Reset your password: ${link} (expires in 1 hour; ignore if you didn't request this)`
-    ).catch((err) => console.error("Failed to send reset email:", err));
-  }
+  // Respond first and do the lookup, token write and SMTP send in the
+  // background. Doing them inline only for existing accounts made response
+  // time reveal which emails are registered, contradicting the generic message.
+  void (async () => {
+    try {
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user || user.deletedAt) return;
+      await prisma.passwordResetToken.updateMany({
+        where: { userId: user.id, usedAt: null, expiresAt: { gt: new Date() } },
+        data: { usedAt: new Date() },
+      });
+      const raw = issueRawToken();
+      await prisma.passwordResetToken.create({
+        data: { userId: user.id, tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS) },
+      });
+      const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:3000").split(",")[0].trim();
+      const link = `${frontendUrl}/reset-password?token=${raw}`;
+      await sendMail(
+        user.email,
+        "Reset your Rolichat password",
+        `<p>Someone requested a password reset for this account. If that was you, set a new password:</p><p><a href="${link}">${link}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
+        `Reset your password: ${link} (expires in 1 hour; ignore if you didn't request this)`
+      );
+    } catch (err) {
+      console.error("Password reset processing failed:", err);
+    }
+  })();
 
   return res.json(genericResponse);
 }));

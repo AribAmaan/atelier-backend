@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Prisma, PaymentOrder } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { asyncHandler } from "../lib/asyncHandler";
 import { prisma } from "../lib/db";
 import { getCurrentUserId } from "../lib/auth";

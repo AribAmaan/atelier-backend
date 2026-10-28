@@ -1,3 +1,4 @@
+import { truncateUnits } from "../text";
 import {
   synthesizeGroqSpeech,
   splitForSpeech,
@@ -16,8 +17,7 @@ import { streamCloudflareChat, completeCloudflareChat, isCloudflareChatConfigure
 import { streamOllamaChat, completeOllamaChat, isOllamaAvailable } from "./ollama";
 import { ProviderBreaker, isRateLimitError, isTimeoutError } from "./circuitBreaker";
 import { EmptyResponseError } from "./openaiCompatible";
-import { getEngineConfig, type RoleplayEngineConfig } from "./engines";
-import crypto from "crypto";
+import { type RoleplayEngineConfig } from "./engines";
 import { buildReplyGuidance, replyProfile, clampReplyToWordCeiling } from "./replyPolicy";
 import { streamCompleteReply } from "./completeReply";
 import { hazelnutContextEnabled } from "../hazelnutContext";
@@ -131,7 +131,6 @@ function recordProviderRequest(
 }
 
 function logProviderStats() {
-  const now = Date.now();
   const entries = [...providerStats.entries()];
   if (entries.length === 0) return;
   console.log("\n[stats] === Provider stats (last 60s) ===");
@@ -1094,11 +1093,12 @@ Rules:
 - personality: comma-separated traits (under 20 words).
 - backstory: 2-4 sentences of history/motivation, third person.
 - greeting: the character's first line, in character, first person.
-Match the idea's tone — including mature/NSFW themes if implied. Be evocative and specific; avoid generic filler.`;
+Match the idea's tone — including mature/NSFW themes if implied. Be evocative and specific; avoid generic filler.
+Every character must be clearly an adult (18 or older). Never state or imply an age under 18, and never describe a character as childlike or a student below adult age.`;
 
 const DRAFT_SYSTEM_PROMPT_EXPLICIT = `${DRAFT_SYSTEM_PROMPT}
 
-The user's idea is for an adult/NSFW character. Lean into seductive, romantic, or mature traits and a greeting fitting an explicit roleplay persona. Do not sanitize or soften.
+The user's idea is for an adult/NSFW character. Lean into seductive, romantic, or mature traits and a greeting fitting an explicit roleplay persona. Do not sanitize or soften, but the character must be an adult aged 18 or older (state an adult age such as 25 in the backstory). If the idea describes anyone under 18, return {"error": "underage"} instead of a character.
 Include "roleplayNotes": one short paragraph of scenario hooks, seduction style, and soft boundaries for spicy chat (under 120 words).
 JSON shape: {"name": "...", "tagline": "...", "personality": "...", "backstory": "...", "greeting": "...", "roleplayNotes": "..."}`;
 
@@ -1118,11 +1118,11 @@ function parseCharacterDraft(raw: string): CharacterDraft | null {
   for (const field of fields) {
     const value = obj[field];
     if (typeof value !== "string" || !value.trim()) return null;
-    draft[field] = value.trim().slice(0, 1200);
+    draft[field] = truncateUnits(value.trim(), 1200);
   }
   const notes = obj.roleplayNotes;
   if (typeof notes === "string" && notes.trim()) {
-    draft.roleplayNotes = notes.trim().slice(0, 1200);
+    draft.roleplayNotes = truncateUnits(notes.trim(), 1200);
   }
   return draft as CharacterDraft;
 }
