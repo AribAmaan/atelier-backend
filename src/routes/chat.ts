@@ -1,5 +1,3 @@
-import { minorSexualContentDetected, characterMinorFlagged, MINOR_CONTENT_ERROR } from "../lib/minorSafety";
-import { truncateUnits } from "../lib/text";
 import { Router } from "express";
 import { createHash } from "node:crypto";
 import { buildAwarenessTurnGuard } from "../lib/conversationAwareness";
@@ -239,9 +237,9 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
     ? createHash("sha256").update(JSON.stringify([userId, characterId, requestId])).digest("hex") : null;
   const storyContext = buildStoryContext(body.story);
   const editMessageId = typeof body.editMessageId === "string" ? body.editMessageId : null;
-  const editContent = typeof body.editContent === "string" ? truncateUnits(body.editContent.trim(), MAX_MESSAGE_LENGTH) : "";
+  const editContent = typeof body.editContent === "string" ? body.editContent.trim().slice(0, MAX_MESSAGE_LENGTH) : "";
   const isEdit = editMessageId !== null;
-  const userMessage = typeof body.message === "string" ? truncateUnits(body.message.trim(), MAX_MESSAGE_LENGTH) : "";
+  const userMessage = typeof body.message === "string" ? body.message.trim().slice(0, MAX_MESSAGE_LENGTH) : "";
   // explicitMode is controlled by the chat UI toggle. Any signed-in user may
   // enable it for their private conversations — not limited to isExplicit characters.
   // If the client sent a named engine id (from the roleplay-engine picker),
@@ -294,39 +292,13 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   const recentWindow = engine?.id === "hazelnut" && !compactHazelnut ? 20 : engine?.recentMessageWindow ?? RECENT_MESSAGE_WINDOW;
   const summarizeTrigger = engine?.id === "hazelnut" && !compactHazelnut ? 36 : engine?.summarizeTrigger ?? SUMMARIZE_TRIGGER;
   const sceneDirective =
-    typeof body.sceneDirective === "string" ? truncateUnits(body.sceneDirective.trim(), 500) : undefined;
+    typeof body.sceneDirective === "string" ? body.sceneDirective.trim().slice(0, 500) : undefined;
 
   if (!isRegenerate && !isEdit && !userMessage && !sceneDirective) {
     return res.status(400).json({ error: "Message can't be empty." });
   }
   if (isEdit && !editContent) {
     return res.status(400).json({ error: "Message can't be empty." });
-  }
-
-  // Backstop against sexualized minors, checked before anything is stored or
-  // any provider is called — so provider failover can't route around it. The
-  // user's own text must not state an under-18 age or use unambiguous minor
-  // terms in a sexual context, and in mature mode the character itself must
-  // not be defined as under 18. See lib/minorSafety.ts for the (deliberately
-  // narrow) rules.
-  const explicitContext = explicitMode || character.isExplicit === true;
-  if (minorSexualContentDetected([userMessage, editContent, sceneDirective], explicitContext)) {
-    return res.status(400).json({ error: MINOR_CONTENT_ERROR, code: "minor_content_blocked" });
-  }
-  if (
-    explicitContext &&
-    characterMinorFlagged(
-      {
-        subject: [character.name, character.tagline, character.personality, character.greeting, character.avatarPrompt],
-        narrative: [character.backstory, character.roleplayNotes],
-      },
-      true
-    )
-  ) {
-    return res.status(403).json({
-      error: "This character can't be used for mature chat because it's described as under 18.",
-      code: "minor_character_blocked",
-    });
   }
 
   let regenTargetId: string | null = null;
@@ -831,7 +803,7 @@ router.put("/:characterId/memory", asyncHandler(async (req, res) => {
       return res.json({ memorySummary: updated.memorySummary, summarizedThrough: updated.summarizedThrough });
     }
 
-    const memorySummary = typeof body.memorySummary === "string" ? truncateUnits(body.memorySummary.trim(), 4000) : null;
+    const memorySummary = typeof body.memorySummary === "string" ? body.memorySummary.trim().slice(0, 4000) : null;
     if (memorySummary === null) {
       return res.status(400).json({ error: "memorySummary must be a string." });
     }
@@ -843,13 +815,7 @@ router.put("/:characterId/memory", asyncHandler(async (req, res) => {
   } finally { activeGenerations.delete(characterId); }
 }));
 
-// Validated like IMAGE_GEN_TIMEOUT_SECONDS: a non-numeric or out-of-range value
-// would otherwise become NaN/0 and make every voice request fail immediately.
-const GROQ_TTS_TIMEOUT_MS = (() => {
-  const seconds = Number(process.env.GROQ_TTS_TIMEOUT_SECONDS || "20");
-  return Number.isFinite(seconds) && seconds >= 1 && seconds <= 120 ? seconds * 1000 : 20_000;
-})();
-let ttsKeyCursor = 0;
+const GROQ_TTS_TIMEOUT_MS = Number(process.env.GROQ_TTS_TIMEOUT_SECONDS || "20") * 1000;
 const MAX_SPEECH_INPUT_CHARS = 2000; // caps how much of a long reply we'll ever synthesize in one request
 
 // POST /api/chat/:characterId/speak — text-to-speech for a message, using
@@ -879,7 +845,7 @@ router.post("/:characterId/speak", asyncHandler(async (req, res) => {
   }
 
   const body = req.body ?? {};
-  const text = typeof body.text === "string" ? truncateUnits(body.text.trim(), MAX_SPEECH_INPUT_CHARS) : "";
+  const text = typeof body.text === "string" ? body.text.trim().slice(0, MAX_SPEECH_INPUT_CHARS) : "";
   if (!text) {
     return res.status(400).json({ error: "No text to speak." });
   }
@@ -888,10 +854,7 @@ router.post("/:characterId/speak", asyncHandler(async (req, res) => {
     ? (requestedVoice as TtsVoice)
     : "hannah";
 
-  // Spread TTS load across all configured Groq keys instead of always
-  // spending the first key's quota.
-  const ttsKeys = getGroqKeys();
-  const apiKey = ttsKeys.length ? ttsKeys[ttsKeyCursor++ % ttsKeys.length].key : undefined;
+  const apiKey = getGroqKeys()[0]?.key;
   if (!apiKey) {
     return res.status(400).json({ error: "Voice playback needs a GROQ_API_KEY set in .env." });
   }
@@ -1003,10 +966,7 @@ async function maybeSummarize(
       memorySummary: character.memorySummary,
     },
     data: {
-      // memorySummary is VARCHAR(8000); the model is only told a word limit,
-      // so clamp before writing. An oversized value would fail the update on
-      // every later turn and silently stall memory.
-      memorySummary: truncateUnits(updatedSummary, 7900),
+      memorySummary: updatedSummary,
       summarizedThrough: character.summarizedThrough + toFold.length,
     },
   });

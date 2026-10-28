@@ -1,6 +1,5 @@
 import { prisma } from "../lib/db";
 import { sendMail } from "../lib/mailer";
-import { anonymizeUserInTx } from "../lib/accountDeletion";
 
 // Inactivity data-retention policy:
 //   - No activity for WARNING_AFTER_DAYS  -> warning email, one time
@@ -82,13 +81,26 @@ async function anonymizeInactiveAccounts() {
   let completed = 0;
   for (const user of candidates) {
     try {
-      // Atomically recheck activity and the full notice period before deletion.
-      const removed = await prisma.$transaction(tx =>
-        anonymizeUserInTx(tx, user.id, {
-          lastActiveAt: { lt: daysAgo(DELETE_AFTER_DAYS) },
-          deletionWarningSentAt: { lte: daysAgo(NOTICE_DAYS) },
-        })
-      );
+      const removed = await prisma.$transaction(async tx => {
+        // Atomically recheck activity and the full notice period before deletion.
+        const claim = await tx.user.updateMany({
+          where: { id: user.id, deletedAt: null, lastActiveAt: { lt: daysAgo(DELETE_AFTER_DAYS) }, deletionWarningSentAt: { lte: daysAgo(NOTICE_DAYS) } },
+          data: {
+            email: `deleted-${user.id}@rolichat.invalid`, passwordHash: "DELETED_ACCOUNT",
+            displayName: "Deleted user", googleId: null, username: null, highlights: null,
+            avatarUrl: null, birthdate: new Date("1970-01-01T00:00:00Z"),
+            emailVerified: false, sparkBalance: 0, membershipTier: "free",
+            membershipRenewsAt: null, deletionWarningSentAt: null, deletedAt: new Date(),
+          },
+        });
+        if (claim.count !== 1) return false;
+        await tx.message.deleteMany({ where: { userId: user.id } });
+        await tx.character.deleteMany({ where: { ownerId: user.id } });
+        await tx.report.deleteMany({ where: { reporterId: user.id } });
+        await tx.passwordResetToken.deleteMany({ where: { userId: user.id } });
+        await tx.emailVerificationToken.deleteMany({ where: { userId: user.id } });
+        return true;
+      });
       if (removed) completed++;
     } catch (err) {
       console.error(`[retention] failed to anonymize user ${user.id}`, err);

@@ -1,4 +1,3 @@
-import { truncateUnits } from "../lib/text";
 import { Router } from "express";
 import { asyncHandler } from "../lib/asyncHandler";
 import { prisma } from "../lib/db";
@@ -44,7 +43,7 @@ router.post("/characters/:id/report", asyncHandler(async (req, res) => {
   }
 
   const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
-  const note = typeof req.body?.note === "string" ? truncateUnits(req.body.note.trim(), 500) : "";
+  const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
   if (!VALID_REASONS.has(reason)) {
     return res.status(400).json({ error: "Choose a valid report reason." });
   }

@@ -152,7 +152,6 @@ model Message {
 
   @@index([characterId, userId, createdAt])
   @@index([characterId, createdAt])
-  @@index([userId, characterId, createdAt])
 }
 
 // One row per Razorpay order this app has created (spark-pack purchase or

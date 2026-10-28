@@ -4,8 +4,6 @@ import { prisma } from "../lib/db";
 import { getCurrentUserId } from "../lib/auth";
 import { checkRateLimit } from "../lib/rateLimit";
 import { draftCharacterWithFallback, listAvailableProviders } from "../lib/providers";
-import { truncateGraphemes, truncateUnits } from "../lib/text";
-import { minorSexualContentDetected, characterMinorFlagged, MINOR_CONTENT_ERROR } from "../lib/minorSafety";
 
 
 const router = Router();
@@ -16,7 +14,7 @@ const MAX_IMPORT_BATCH = 50;
 
 function clean(value: unknown, fallback = "") {
   if (typeof value !== "string") return fallback;
-  return truncateUnits(value.trim(), MAX_FIELD_LENGTH);
+  return value.trim().slice(0, MAX_FIELD_LENGTH);
 }
 
 type CharacterInput = {
@@ -40,7 +38,7 @@ const MAX_PROMPT_FIELD_LENGTH = 2000;
 
 function cleanPrompt(value: unknown, fallback = "") {
   if (typeof value !== "string") return fallback;
-  return truncateUnits(value.trim(), MAX_PROMPT_FIELD_LENGTH);
+  return value.trim().slice(0, MAX_PROMPT_FIELD_LENGTH);
 }
 
 function parseExamples(value: unknown): string {
@@ -51,8 +49,8 @@ function parseExamples(value: unknown): string {
     const parsed = JSON.parse(trimmed);
     if (!Array.isArray(parsed)) return "[]";
     const sanitized = parsed.slice(0, 10).map((turn: any) => ({
-      user: typeof turn?.user === "string" ? truncateUnits(turn.user, 500) : "",
-      character: typeof turn?.character === "string" ? truncateUnits(turn.character, 500) : "",
+      user: typeof turn?.user === "string" ? turn.user.slice(0, 500) : "",
+      character: typeof turn?.character === "string" ? turn.character.slice(0, 500) : "",
     })).filter((turn: any) => turn.user || turn.character);
     while (JSON.stringify(sanitized).length > 8000) sanitized.pop();
     return JSON.stringify(sanitized);
@@ -68,29 +66,14 @@ function parseTags(value: unknown): string {
   try {
     const parsed = JSON.parse(trimmed);
     if (Array.isArray(parsed)) {
-      const sanitized = parsed.filter((t: any) => typeof t === "string").map((t: string) => truncateUnits(t.trim(), 30)).filter(Boolean).slice(0, 10);
+      const sanitized = parsed.filter((t: any) => typeof t === "string").map((t: string) => t.trim().slice(0, 30)).filter(Boolean).slice(0, 10);
       return JSON.stringify(sanitized);
     }
   } catch {
     // fall through to comma-separated parsing
   }
-  const sanitized = trimmed.split(",").map((t) => truncateUnits(t.trim(), 30)).filter(Boolean).slice(0, 10);
+  const sanitized = trimmed.split(",").map((t) => t.trim().slice(0, 30)).filter(Boolean).slice(0, 10);
   return JSON.stringify(sanitized);
-}
-
-// Server-side backstop against sexualized minors in character content. See
-// lib/minorSafety.ts — deliberately narrow so ordinary adult backstories pass.
-function characterFieldsFlagged(
-  f: { name: string; tagline: string; personality: string; backstory: string; greeting: string; roleplayNotes: string; avatarPrompt: string; scenePromptTemplate: string; examples: string; tags: string },
-  isExplicit: boolean
-): boolean {
-  return characterMinorFlagged(
-    {
-      subject: [f.name, f.tagline, f.personality, f.greeting, f.avatarPrompt, f.tags],
-      narrative: [f.backstory, f.roleplayNotes, f.scenePromptTemplate, f.examples],
-    },
-    isExplicit
-  );
 }
 
 function parseCharacterInput(body: unknown): { data?: CharacterInput; error?: string } {
@@ -98,12 +81,12 @@ function parseCharacterInput(body: unknown): { data?: CharacterInput; error?: st
     return { error: "Each entry must be an object." };
   }
   const raw = body as Record<string, unknown>;
-  const name = truncateUnits(clean(raw.name), 191);
-  const tagline = truncateUnits(clean(raw.tagline), 191);
+  const name = clean(raw.name).slice(0, 191);
+  const tagline = clean(raw.tagline).slice(0, 191);
   const personality = clean(raw.personality);
   const backstory = clean(raw.backstory);
   const greeting = clean(raw.greeting);
-  const avatarEmoji = truncateGraphemes(clean(raw.avatarEmoji, "🌸"), 8) || "🌸";
+  const avatarEmoji = clean(raw.avatarEmoji, "🌸").slice(0, 8) || "🌸";
   const accentColor = /^#[0-9a-fA-F]{6}$/.test(String(raw.accentColor ?? ""))
     ? String(raw.accentColor)
     : "#c9a227";
@@ -123,9 +106,6 @@ function parseCharacterInput(body: unknown): { data?: CharacterInput; error?: st
 
   if (!name || !personality || !backstory || !greeting) {
     return { error: "Name, personality, backstory, and greeting are all required." };
-  }
-  if (characterFieldsFlagged({ name, tagline, personality, backstory, greeting, roleplayNotes, avatarPrompt, scenePromptTemplate, examples, tags }, isExplicit)) {
-    return { error: MINOR_CONTENT_ERROR };
   }
 
   return {
@@ -250,14 +230,10 @@ router.post("/draft", asyncHandler(async (req, res) => {
     return res.status(429).json({ error: "Too many draft requests. Please slow down a bit." });
   }
 
-  const idea = typeof req.body?.idea === "string" ? truncateUnits(req.body.idea.trim(), 300) : "";
+  const idea = typeof req.body?.idea === "string" ? req.body.idea.trim().slice(0, 300) : "";
   const allowExplicit = req.body?.allowExplicit === true;
   if (!idea) {
     return res.status(400).json({ error: "Describe your character idea in a sentence first." });
-  }
-
-  if (minorSexualContentDetected([idea], allowExplicit)) {
-    return res.status(400).json({ error: MINOR_CONTENT_ERROR });
   }
 
   const available = await listAvailableProviders();
@@ -269,14 +245,6 @@ router.post("/draft", asyncHandler(async (req, res) => {
 
   try {
     const draft = await draftCharacterWithFallback(idea, allowExplicit);
-    // The model's output is checked too, not just the idea.
-    const d = draft as unknown as Record<string, string | undefined>;
-    if (characterMinorFlagged({
-      subject: [d.name, d.tagline, d.personality, d.greeting],
-      narrative: [d.backstory, d.roleplayNotes],
-    }, allowExplicit)) {
-      return res.status(422).json({ error: MINOR_CONTENT_ERROR });
-    }
     return res.json({ draft });
   } catch (err) {
     console.error(err);
@@ -486,12 +454,12 @@ router.put("/:id", asyncHandler(async (req, res) => {
   if (!existing) return res.status(404).json({ error: "Character not found." });
 
   const body = req.body ?? {};
-  const name = truncateUnits(clean(body.name, existing.name), 191);
-  const tagline = truncateUnits(clean(body.tagline, existing.tagline), 191);
+  const name = clean(body.name, existing.name).slice(0, 191);
+  const tagline = clean(body.tagline, existing.tagline).slice(0, 191);
   const personality = clean(body.personality, existing.personality);
   const backstory = clean(body.backstory, existing.backstory);
   const greeting = clean(body.greeting, existing.greeting);
-  const avatarEmoji = truncateGraphemes(clean(body.avatarEmoji, existing.avatarEmoji), 8) || existing.avatarEmoji;
+  const avatarEmoji = clean(body.avatarEmoji, existing.avatarEmoji).slice(0, 8) || existing.avatarEmoji;
   const accentColor = /^#[0-9a-fA-F]{6}$/.test(body.accentColor) ? body.accentColor : existing.accentColor;
   const isExplicit = typeof body.isExplicit === "boolean" ? body.isExplicit : existing.isExplicit;
   const requestedPublic = typeof body.isPublic === "boolean" ? body.isPublic : existing.isPublic;
@@ -508,9 +476,6 @@ router.put("/:id", asyncHandler(async (req, res) => {
 
   if (!name || !personality || !backstory || !greeting) {
     return res.status(400).json({ error: "Name, personality, backstory, and greeting are all required." });
-  }
-  if (characterFieldsFlagged({ name, tagline, personality, backstory, greeting, roleplayNotes, avatarPrompt, scenePromptTemplate, examples, tags }, isExplicit)) {
-    return res.status(400).json({ error: MINOR_CONTENT_ERROR });
   }
 
   if (isPublic && !existing.isPublic) {
