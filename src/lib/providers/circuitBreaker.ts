@@ -18,7 +18,9 @@
  * its own independent breaker instance.
  */
 
-const RETRY_HINT_RE = /retry in\s+([\d.]+)\s*s/i;
+// The seconds unit is REQUIRED: without it "retry in 2 minutes" would be read as
+// 2 seconds. mediaHttp always emits "Retry-After: <n>s." so image errors still match.
+const RETRY_HINT_RE = /(?:retry\s+after|retry\s+in|retry-after)\s*[:=]?\s*([\d.]+)\s*(?:seconds?|secs?|s)(?![a-z])/i;
 
 export type BreakerDefaults = {
   cooldownSeconds: number;
@@ -70,10 +72,18 @@ export class ProviderBreaker {
     }
   }
 
+  /** Open the breaker for a known provider window, even after a successful response. */
+  cooldownFor(seconds: number, reason = "provider cooldown") {
+    const duration = Math.max(1, Math.min(Number.isFinite(seconds) ? seconds : this.cooldownSeconds, 3600));
+    this.cooldownUntil = Date.now() + duration * 1000;
+    this.consecutiveTimeouts = 0;
+    console.warn(`[breaker] ${this.name}: cooling down for ${duration.toFixed(1)}s (${reason})`);
+  }
+
   /**
    * Open the breaker after a quota/rate-limit error. Prefers the exact wait
-   * time the provider reports ("Please try again in 14.86s") when parseable;
-   * otherwise falls back to this breaker's configured cooldown.
+   * time the provider reports ("Retry after 14.86s" or Retry-After headers)
+   * when parseable; otherwise uses a provider-aware fallback window.
    */
   trip(error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -82,16 +92,22 @@ export class ProviderBreaker {
     if (match) {
       const parsed = parseFloat(match[1]);
       if (!Number.isNaN(parsed)) waitSeconds = parsed + 2;
+    } else if (/\b402\b|free_limit|free limit reached/i.test(message)) {
+      // The legacy Pollinations Classic endpoint explicitly documents a 45s/IP window.
+      waitSeconds = Math.max(waitSeconds, 45);
+    } else if (/\b503\b|service_unavailable/i.test(message)) {
+      waitSeconds = Math.max(waitSeconds, 30);
     }
-    this.cooldownUntil = Date.now() + waitSeconds * 1000;
-    this.consecutiveTimeouts = 0;
-    console.warn(`[breaker] ${this.name}: rate-limited — opening for ${waitSeconds.toFixed(1)}s`);
+    this.cooldownFor(waitSeconds, "rate-limited / unavailable");
   }
 }
 
 export function isRateLimitError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return (
+    // NOTE: intentionally the original chat-provider semantics. 402 / 503 / FREE_LIMIT
+    // handling for image providers lives in avatar.ts (isPollinationsUnavailableError),
+    // so image reliability work does not silently change chat failover behaviour.
     message.includes("429") ||
     message.includes("quota") ||
     message.includes("rate limit") ||

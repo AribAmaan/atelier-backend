@@ -48,7 +48,20 @@ export async function requestMediaResource(
       }
     }
     const body = Buffer.concat(chunks, length);
-    if (!response.ok) throw new Error(`${provider} API error ${response.status}: ${body.toString("utf8").slice(0, 300)}`);
+    if (!response.ok) {
+      const retryHeader = response.headers.get("retry-after");
+      let retryHint = "";
+      if (retryHeader) {
+        const seconds = Number(retryHeader);
+        if (Number.isFinite(seconds) && seconds >= 0) {
+          retryHint = ` Retry-After: ${seconds}s.`;
+        } else {
+          const date = Date.parse(retryHeader);
+          if (Number.isFinite(date)) retryHint = ` Retry-After: ${Math.max(0, (date - Date.now()) / 1000).toFixed(1)}s.`;
+        }
+      }
+      throw new Error(`${provider} API error ${response.status}.${retryHint} ${body.toString("utf8").slice(0, 1000)}`);
+    }
     if (!body.length) throw new Error(`${provider} returned an empty media response`);
     return { body, contentType: (response.headers.get("content-type") || "").toLowerCase() };
   };

@@ -11,6 +11,8 @@ import { imageTimeoutMs, requestMediaResource } from "../lib/providers/mediaHttp
 import { uploadAvatarBuffer } from "../lib/b2";
 import { generateCloudflareImage, isCloudflareConfigured } from "../lib/providers/cloudflare";
 import { generateDicebearAvatar } from "../lib/providers/dicebear";
+import { minorSexualContentDetected, MINOR_CONTENT_ERROR } from "../lib/minorSafety";
+import { truncateUnits } from "../lib/text";
 import { acquireImageGenSlot, releaseImageGenSlot, ImageGenJobData, ImageGenJobResult } from "../lib/imageQueue";
 import { ProviderBreaker, isRateLimitError, isTimeoutError } from "../lib/providers/circuitBreaker";
 
@@ -34,42 +36,73 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-const POLLINATIONS_IMAGE_URL = "https://image.pollinations.ai/prompt";
+const POLLINATIONS_LEGACY_IMAGE_URL = "https://image.pollinations.ai/prompt";
+const POLLINATIONS_CURRENT_IMAGE_URL = "https://gen.pollinations.ai/image";
 const POLLINATIONS_SAFE_IMAGE_MODEL = "lykon/dreamshaper-8-lcm";
 const POLLINATIONS_EXPLICIT_IMAGE_MODEL = "vendouple/uncensored-image-enhanced";
 
-const pollinationsBreaker = new ProviderBreaker("Pollinations", { cooldownSeconds: 30, timeoutTripThreshold: 2, timeoutCooldownSeconds: 15 }, "POLLINATIONS");
+const pollinationsBreaker = new ProviderBreaker("Pollinations", { cooldownSeconds: 30, timeoutTripThreshold: 1, timeoutCooldownSeconds: 30 }, "POLLINATIONS");
+let legacyPollinationsQueue: Promise<void> = Promise.resolve();
 
-async function withPollinationsRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      if (pollinationsBreaker.isOpen()) {
-        throw new Error("Pollinations circuit breaker open, retry later");
-      }
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const isRateLimit = isRateLimitError(err);
-      const isTimeout = isTimeoutError(err);
-      if ((isRateLimit || isTimeout) && pollinationsBreaker.isOpen()) {
-        throw err;
-      }
-      const isQueueFull = /429|Too Many Requests|Queue full/i.test(msg);
-      if (!isQueueFull || attempt === maxAttempts) {
-        if (isRateLimit) {
-          pollinationsBreaker.trip(err);
-        } else if (isTimeout) {
-          pollinationsBreaker.recordTimeout();
-        }
-        throw err;
-      }
-      const backoffMs = 500 * attempt;
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
-    }
+/**
+ * Use the current authenticated Pollinations API when a server-side key is configured.
+ * Without a key, retain the legacy Classic endpoint as a best-effort free fallback;
+ * that endpoint has a strict per-IP limit, so its errors must open the breaker below.
+ */
+function buildPollinationsRequest(prompt: string, params: URLSearchParams): { url: string; init: RequestInit } {
+  const apiKey = process.env.POLLINATIONS_API_KEY?.trim();
+  const baseUrl = apiKey ? POLLINATIONS_CURRENT_IMAGE_URL : POLLINATIONS_LEGACY_IMAGE_URL;
+  const url = `${baseUrl}/${encodeURIComponent(prompt)}?${params.toString()}`;
+  if (!apiKey) return { url, init: {} };
+  return { url, init: { headers: { Authorization: `Bearer ${apiKey}` } } };
+}
+
+function isPollinationsUnavailableError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  // These are provider-side conditions. Do not retry them synchronously: fall through
+  // to Cloudflare and cool Pollinations down so every new avatar does not hit the same wall.
+  return /\b(?:401|402|403|429|503)\b/.test(message)
+    || message.includes("free_limit")
+    || message.includes("service_unavailable")
+    || message.includes("insufficient balance")
+    || message.includes("upstream provider failed")
+    || /too many requests|queue full/i.test(message);
+}
+
+async function withPollinationsProtection<T>(fn: () => Promise<T>): Promise<T> {
+  const hasApiKey = Boolean(process.env.POLLINATIONS_API_KEY?.trim());
+  let releaseLegacySlot: (() => void) | undefined;
+
+  // The legacy Classic endpoint is rate-limited per egress IP. Serialize it so
+  // concurrent avatar/background jobs do not all race into the same quota window.
+  if (!hasApiKey) {
+    const previous = legacyPollinationsQueue;
+    legacyPollinationsQueue = new Promise<void>((resolve) => { releaseLegacySlot = resolve; });
+    await previous;
   }
-  throw lastErr;
+
+  try {
+    if (pollinationsBreaker.isOpen()) {
+      throw new Error("Pollinations circuit breaker open, retry later");
+    }
+    const result = await fn();
+    if (!hasApiKey) {
+      // Classic documents one anonymous image every 45 seconds per IP. Open the
+      // breaker after a success, not only after a 402, so the next job uses fallback.
+      pollinationsBreaker.cooldownFor(45, "legacy Classic per-IP generation window");
+    }
+    return result;
+  } catch (err) {
+    if (isPollinationsUnavailableError(err) || isRateLimitError(err)) {
+      pollinationsBreaker.trip(err);
+    } else if (isTimeoutError(err)) {
+      pollinationsBreaker.recordTimeout();
+    }
+    // Avoid synchronously retrying a rate-limited/slow provider; use Cloudflare now.
+    throw err;
+  } finally {
+    releaseLegacySlot?.();
+  }
 }
 
 async function generatePollinationsAvatar(
@@ -78,25 +111,23 @@ async function generatePollinationsAvatar(
   timeoutMs: number
 ): Promise<Buffer> {
   const params = new URLSearchParams({
-    width: "1024",
-    height: "1024",
+    // DreamShaper 8 LCM is optimized for low-step SD 1.5 generation. Keep the
+    // safe path near its native working size; avatars are displayed small anyway.
+    width: character.isExplicit ? "1024" : "768",
+    height: character.isExplicit ? "1024" : "768",
     model: character.isExplicit ? POLLINATIONS_EXPLICIT_IMAGE_MODEL : POLLINATIONS_SAFE_IMAGE_MODEL,
     nologo: "true",
     safe: character.isExplicit ? "false" : "true",
     seed: String(Date.now() % 1_000_000),
-    steps: "35",
+    steps: character.isExplicit ? "35" : "8",
     // Explicitly pinned off: Pollinations' `enhance` flag lets an LLM
     // rewrite the prompt before generation. Default is already false,
     // but we pin it so a user's exact custom prompt can never get
     // silently reworded if that default ever changes upstream.
     enhance: "false",
   });
-  const apiKey = process.env.POLLINATIONS_API_KEY;
-  if (apiKey) params.set("key", apiKey);
-
-  const url = `${POLLINATIONS_IMAGE_URL}/${encodeURIComponent(prompt)}?${params.toString()}`;
-
-  const { body } = await requestMediaResource(url, {}, "Pollinations", timeoutMs);
+  const request = buildPollinationsRequest(prompt, params);
+  const { body } = await requestMediaResource(request.url, request.init, "Pollinations", timeoutMs);
   return body;
 }
 
@@ -106,21 +137,20 @@ async function generatePollinationsBackground(
   timeoutMs: number
 ): Promise<Buffer> {
   const params = new URLSearchParams({
+    // Generate the final 16:9 background at native target dimensions. The safe
+    // DreamShaper LCM path uses 8 steps; do not render small then upscale, which
+    // softens fine detail in the user's chat wallpaper.
     width: "1920",
     height: "1080",
     model: isExplicit ? POLLINATIONS_EXPLICIT_IMAGE_MODEL : POLLINATIONS_SAFE_IMAGE_MODEL,
     nologo: "true",
     safe: isExplicit ? "false" : "true",
     seed: String(Date.now() % 1_000_000),
-    steps: "35",
+    steps: isExplicit ? "35" : "8",
     enhance: "false",
   });
-  const apiKey = process.env.POLLINATIONS_API_KEY;
-  if (apiKey) params.set("key", apiKey);
-
-  const url = `${POLLINATIONS_IMAGE_URL}/${encodeURIComponent(prompt)}?${params.toString()}`;
-
-  const { body } = await requestMediaResource(url, {}, "Pollinations", timeoutMs);
+  const request = buildPollinationsRequest(prompt, params);
+  const { body } = await requestMediaResource(request.url, request.init, "Pollinations", timeoutMs);
   return body;
 }
 
@@ -165,7 +195,7 @@ function buildBackgroundPrompt(
   const parts = [
     `A background scene for ${character.name}.`,
     character.tagline ? `Tagline: ${character.tagline}.` : null,
-    character.backstory?.trim() ? `Setting: ${character.backstory.trim().slice(0, 500)}.` : null,
+    character.backstory?.trim() ? `Setting: ${truncateUnits(character.backstory.trim(), 500)}.` : null,
   ].filter(Boolean);
 
   return parts.join(" ");
@@ -183,15 +213,63 @@ async function validateGeneratedImage(bytes: Buffer): Promise<void> {
 
 type ProviderAttempt = { name: string; run: () => Promise<Buffer>; breaker?: ProviderBreaker };
 
+function providerTimeoutMs(envName: string, fallbackMs: number): number {
+  const raw = process.env[envName];
+  if (raw === undefined || raw.trim() === "") return fallbackMs;
+  const seconds = Number(raw);
+  return Number.isInteger(seconds) && seconds >= 1 && seconds <= 120 ? seconds * 1000 : fallbackMs;
+}
+
+function isCloudflareSafetyRejection(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes("output has been flagged") || message.includes("code 3030") || message.includes('"code":3030');
+}
+
+function buildSafeCloudflarePrompt(prompt: string, kind: "avatar" | "background"): string {
+  const framing = kind === "avatar"
+    ? "Create a safe-for-work, non-sexual portrait of an adult fictional character. The character is fully clothed and posed neutrally, with no nudity or suggestive content."
+    : "Create a safe-for-work environment/background illustration with no nudity, sexual content, or graphic violence.";
+  return truncateUnits(`${framing} Preserve the benign visual details from this creative brief: ${prompt}`, 3500);
+}
+
+async function generateCloudflareWithSafeRetry(
+  prompt: string,
+  isExplicit: boolean,
+  kind: "avatar" | "background",
+  timeoutMs: number,
+  size: { width: number; height: number }
+): Promise<Buffer> {
+  try {
+    return await generateCloudflareImage(prompt, timeoutMs, size);
+  } catch (error) {
+    // Only retry a content-safety rejection for a character explicitly marked SFW,
+    // and only by asking for a more clearly safe result. Never retry this way for 18+ characters.
+    if (isExplicit || !isCloudflareSafetyRejection(error)) throw error;
+    console.warn(`[avatar] Cloudflare safety filter rejected the first ${kind} prompt; retrying once with explicit SFW framing`);
+    return generateCloudflareImage(buildSafeCloudflarePrompt(prompt, kind), timeoutMs, size);
+  }
+}
+
 export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJobResult> {
   await acquireImageGenSlot();
   try {
     const { prompt, isExplicit, kind } = data;
-    const timeoutMs = imageTimeoutMs();
+    const sharedTimeoutMs = imageTimeoutMs();
+    const pollinationsAvatarTimeoutMs = providerTimeoutMs("POLLINATIONS_TIMEOUT_SECONDS", Math.min(sharedTimeoutMs, 20_000));
+    // Native 1080p background renders need more time than small avatar renders.
+    // Keep the two timeouts independent so background quality is not traded away
+    // just to meet the avatar latency budget.
+    const pollinationsBackgroundTimeoutMs = providerTimeoutMs(
+      "POLLINATIONS_BACKGROUND_TIMEOUT_SECONDS",
+      Math.max(sharedTimeoutMs, 35_000)
+    );
+    // FLUX.2 Klein is noticeably slower than the Classic image endpoint. Keep its
+    // timeout independent so Pollinations overrides do not prematurely kill Klein.
+    const cloudflareTimeoutMs = providerTimeoutMs("CLOUDFLARE_IMAGE_TIMEOUT_SECONDS", Math.max(sharedTimeoutMs, 45_000));
 
     const pollinationsFn = kind === "avatar"
-      ? () => withPollinationsRetry(() => generatePollinationsAvatar({ isExplicit }, prompt, timeoutMs))
-      : () => withPollinationsRetry(() => generatePollinationsBackground(isExplicit, prompt, timeoutMs));
+      ? () => withPollinationsProtection(() => generatePollinationsAvatar({ isExplicit }, prompt, pollinationsAvatarTimeoutMs))
+      : () => withPollinationsProtection(() => generatePollinationsBackground(isExplicit, prompt, pollinationsBackgroundTimeoutMs));
 
     // Ordered priority chain, not a race: each provider is tried in turn
     // and the first success wins.
@@ -221,9 +299,11 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
     };
     const cloudflareAttempt: ProviderAttempt = {
       name: "cloudflare",
-      run: () => generateCloudflareImage(
+      run: () => generateCloudflareWithSafeRetry(
         prompt,
-        timeoutMs,
+        isExplicit,
+        kind,
+        cloudflareTimeoutMs,
         kind === "avatar" ? { width: 1024, height: 1024 } : { width: 1920, height: 1080 }
       ),
     };
@@ -252,7 +332,7 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[avatar] ${attempt.name} failed: ${msg.slice(0, 300)}`);
         errors.push(`${attempt.name}: ${msg}`);
-        // withPollinationsRetry() already trips its own breaker
+        // withPollinationsProtection() already trips its own breaker
         // internally on a final rate-limit/timeout failure; avoid
         // double-tripping it here.
         if (attempt.breaker && attempt.name !== "pollinations") {
@@ -270,7 +350,7 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
     // one each time.
     if (kind === "avatar") {
       try {
-        const bytes = await generateDicebearAvatar(prompt, timeoutMs);
+        const bytes = await generateDicebearAvatar(prompt, sharedTimeoutMs);
         await validateGeneratedImage(bytes);
         return { bytes, provider: "dicebear-fallback" };
       } catch (err) {
@@ -332,11 +412,19 @@ router.post("/:id/avatar/generate", asyncHandler(async (req, res) => {
   const limit = checkRateLimit(`character-image:${userId}`, 10, 60 * 60);
   if (limit.limited) { res.set("Retry-After", String(limit.retryAfterSeconds)); return res.status(429).json({ error: "Too many image generations. Please try again later." }); }
   const body = req.body ?? {};
-  const customPrompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 2000) : undefined;
+  const customPrompt = typeof body.prompt === "string" ? truncateUnits(body.prompt.trim(), 2000) : undefined;
   const prompt = buildAvatarPrompt(character, customPrompt);
 
   try {
+    if (minorSexualContentDetected([prompt], !!character.isExplicit)) {
+      return res.status(400).json({ error: MINOR_CONTENT_ERROR, code: "minor_content_blocked" });
+    }
     const result = await processImageGen({ prompt, isExplicit: !!character.isExplicit, kind: "avatar" });
+    // Never let the procedural placeholder replace a real avatar the owner
+    // already has; only use it to fill an empty slot.
+    if (result.provider === "dicebear-fallback" && character.avatarUrl) {
+      return res.status(503).set("Retry-After", "30").json({ error: "Image generators are busy right now, so your current avatar was kept. Please try again in a bit." });
+    }
     const cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
     const publicId = `${req.params.id}-${Date.now()}-generated`;
     const avatarUrl = await uploadAvatarBuffer(cleanBytes, publicId);
@@ -370,10 +458,13 @@ router.post("/:id/background/generate", asyncHandler(async (req, res) => {
   const limit = checkRateLimit(`character-image:${userId}`, 10, 60 * 60);
   if (limit.limited) { res.set("Retry-After", String(limit.retryAfterSeconds)); return res.status(429).json({ error: "Too many image generations. Please try again later." }); }
   const body = req.body ?? {};
-  const customPrompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 2000) : undefined;
+  const customPrompt = typeof body.prompt === "string" ? truncateUnits(body.prompt.trim(), 2000) : undefined;
   const prompt = buildBackgroundPrompt(character, customPrompt);
 
   try {
+    if (minorSexualContentDetected([prompt], !!character.isExplicit)) {
+      return res.status(400).json({ error: MINOR_CONTENT_ERROR, code: "minor_content_blocked" });
+    }
     const result = await processImageGen({ prompt, isExplicit: !!character.isExplicit, kind: "background" });
     let cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
     if (cleanBytes.length) {

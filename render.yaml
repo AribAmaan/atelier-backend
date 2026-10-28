@@ -42,12 +42,23 @@ services:
         sync: false
       - key: B2_ENDPOINT
         sync: false
+      # Pollinations: set this to a server-side sk_ Secret Key in Render.
+      # Do not commit the key or place it in frontend code. Without it, the
+      # backend uses the legacy Classic endpoint and respects its per-IP limits.
+      - key: POLLINATIONS_API_KEY
+        sync: false
       # Cloudflare follows Pollinations; DiceBear is the final avatar-only fallback.
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
       - key: CLOUDFLARE_API_TOKEN
         sync: false
       - key: IMAGE_GEN_TIMEOUT_SECONDS
+        value: "45"
+      - key: POLLINATIONS_TIMEOUT_SECONDS
+        value: "20"
+      - key: POLLINATIONS_BACKGROUND_TIMEOUT_SECONDS
+        value: "35"
+      - key: CLOUDFLARE_IMAGE_TIMEOUT_SECONDS
         value: "45"
       - key: CLOUDFLARE_IMAGE_MODEL
         value: "@cf/black-forest-labs/flux-2-klein-4b"
