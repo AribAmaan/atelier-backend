@@ -42,19 +42,22 @@ services:
         sync: false
       - key: B2_ENDPOINT
         sync: false
-      # Cloudflare follows Pollinations; DiceBear is the final avatar-only fallback.
+      # Normal jobs: Cloudflare Klein first, Pollinations fallback. Explicit jobs: Pollinations first
+      # (uncensored model), Cloudflare fallback. DiceBear is the final avatar-only fallback.
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
       - key: CLOUDFLARE_API_TOKEN
         sync: false
       - key: IMAGE_GEN_TIMEOUT_SECONDS
         value: "45"
+      # Cloudflare has its own deadline (1-300s, default 60), still capped by the total budget below.
+      - key: CLOUDFLARE_IMAGE_TIMEOUT_SECONDS
+        value: "60"
+      # Max total time one image request may spend across all providers (10-300s, default 75).
+      - key: IMAGE_GEN_TOTAL_BUDGET_SECONDS
+        value: "75"
       - key: CLOUDFLARE_IMAGE_MODEL
         value: "@cf/black-forest-labs/flux-2-klein-4b"
-      - key: CLOUDFLARE_IMAGE_TIMEOUT_SECONDS
-        value: "20"
-      - key: IMAGE_HEDGE_SECONDS
-        value: "8"
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_API_KEY_2

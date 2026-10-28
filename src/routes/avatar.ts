@@ -7,8 +7,7 @@ import { prisma } from "../lib/db";
 import { getCurrentUserId } from "../lib/auth";
 import sharp from "sharp";
 import { inspectImage } from "../lib/imageValidation";
-import { finalizeGeneratedImage } from "../lib/finalizeImage";
-import { imageTimeoutMs, cloudflareImageTimeoutMs, pollinationsImageTimeoutMs, imageHedgeMs, requestMediaResource } from "../lib/providers/mediaHttp";
+import { cloudflareImageTimeoutMs, imageTimeoutMs, imageTotalBudgetMs, requestMediaResource } from "../lib/providers/mediaHttp";
 import { uploadAvatarBuffer } from "../lib/b2";
 import { generateCloudflareImage, isCloudflareConfigured } from "../lib/providers/cloudflare";
 import { generateDicebearAvatar } from "../lib/providers/dicebear";
@@ -39,40 +38,29 @@ const POLLINATIONS_IMAGE_URL = "https://image.pollinations.ai/prompt";
 const POLLINATIONS_SAFE_IMAGE_MODEL = "lykon/dreamshaper-8-lcm";
 const POLLINATIONS_EXPLICIT_IMAGE_MODEL = "vendouple/uncensored-image-enhanced";
 
-// Cloudflare had NO breaker: when Klein hung, every request re-paid the full
-// timeout. One timeout now skips Cloudflare for 5 min (auto-resets); a
-// rate-limit/quota error skips it for 60s (or the provider's own retry hint).
-const cloudflareBreaker = new ProviderBreaker("Cloudflare", { cooldownSeconds: 60, timeoutTripThreshold: 1, timeoutCooldownSeconds: 300 }, "CLOUDFLARE_IMAGE");
-
 const pollinationsBreaker = new ProviderBreaker("Pollinations", { cooldownSeconds: 30, timeoutTripThreshold: 2, timeoutCooldownSeconds: 15 }, "POLLINATIONS");
+// Cloudflare's free tier runs out of daily neurons; once it does, every request
+// would waste a round trip on a guaranteed failure, so skip it for a while.
+const cloudflareBreaker = new ProviderBreaker("Cloudflare", { cooldownSeconds: 120, timeoutTripThreshold: 3, timeoutCooldownSeconds: 30 }, "CLOUDFLARE_IMAGE");
+const CLOUDFLARE_QUOTA_RE = /daily free allocation|neurons|\b4006\b/i;
+// Don't start another provider (or Pollinations retry) with less time than this left.
+const MIN_ATTEMPT_MS = 5_000;
 
-// Pollinations' free "Classic" API answers 503 (at capacity) and 402 (1 image /
-// 45s / IP) when busy. Neither matched the shared rate-limit matcher, so the
-// breaker never opened and every request wasted a round-trip on it first.
-function isPollinationsBusy(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /API error (402|503)|FREE_LIMIT|SERVICE_UNAVAILABLE/i.test(msg);
-}
-
-function pollinationsRetryHint(err: unknown): unknown {
-  const msg = err instanceof Error ? err.message : String(err);
-  const m = /retry after\s+([\d.]+)\s*s/i.exec(msg);
-  // circuitBreaker.trip() understands "retry in Ns"
-  return new Error(m ? `retry in ${m[1]}s` : msg);
-}
-
-async function withPollinationsRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+async function withPollinationsRetry<T>(fn: (timeoutMs: number) => Promise<T>, totalMs: number, maxAttempts = 3): Promise<T> {
+  const deadline = Date.now() + totalMs;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const remainingMs = deadline - Date.now();
+    if (attempt > 1 && remainingMs < MIN_ATTEMPT_MS) throw lastErr;
     try {
       if (pollinationsBreaker.isOpen()) {
         throw new Error("Pollinations circuit breaker open, retry later");
       }
-      return await fn();
+      return await fn(remainingMs);
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      const isRateLimit = isRateLimitError(err) || isPollinationsBusy(err);
+      const isRateLimit = isRateLimitError(err);
       const isTimeout = isTimeoutError(err);
       if ((isRateLimit || isTimeout) && pollinationsBreaker.isOpen()) {
         throw err;
@@ -80,7 +68,7 @@ async function withPollinationsRetry<T>(fn: () => Promise<T>, maxAttempts = 3): 
       const isQueueFull = /429|Too Many Requests|Queue full/i.test(msg);
       if (!isQueueFull || attempt === maxAttempts) {
         if (isRateLimit) {
-          pollinationsBreaker.trip(pollinationsRetryHint(err));
+          pollinationsBreaker.trip(err);
         } else if (isTimeout) {
           pollinationsBreaker.recordTimeout();
         }
@@ -202,145 +190,90 @@ async function validateGeneratedImage(bytes: Buffer): Promise<void> {
   await sharp(bytes, { limitInputPixels: 40_000_000 }).resize(1, 1).png().toBuffer();
 }
 
-type ProviderAttempt = { name: string; run: () => Promise<Buffer>; breaker?: ProviderBreaker };
+type ProviderAttempt = { name: string; timeoutMs: number; run: (timeoutMs: number) => Promise<Buffer>; breaker?: ProviderBreaker };
 
 export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJobResult> {
   await acquireImageGenSlot();
   try {
     const { prompt, isExplicit, kind } = data;
-    const timeoutMs = pollinationsImageTimeoutMs();
-
-    const pollinationsFn = kind === "avatar"
-      ? () => withPollinationsRetry(() => generatePollinationsAvatar({ isExplicit }, prompt, timeoutMs))
-      : () => withPollinationsRetry(() => generatePollinationsBackground(isExplicit, prompt, timeoutMs));
+    const timeoutMs = imageTimeoutMs();
+    const startedAt = Date.now();
+    const budgetMs = imageTotalBudgetMs();
 
     // Ordered priority chain, not a race: each provider is tried in turn
-    // and the first success wins.
+    // and the first success wins. Every attempt's timeout is clamped to the
+    // time left in the total budget (IMAGE_GEN_TOTAL_BUDGET_SECONDS).
+    //
+    // Order: Cloudflare Klein 4B (4-step model, fastest and most reliable)
+    // first, Pollinations as fallback. EXPLICIT characters keep Pollinations
+    // first because its uncensored model is the one built for them.
     //
     // Gemini was removed (2026-08-24): its image models returned a hard
-    // `limit: 0` free-tier quota for this project on every model tested
-    // — not ordinary rate-limiting, but zero free-tier allocation,
-    // meaning it would never succeed without linking billing.
-    //
-    // Hugging Face was tried and then removed the same day: its
-    // Inference Providers routing for image models proved unusable via
-    // raw HTTP calls in testing — every documented URL/provider
-    // combination (hf-inference, fal-ai path routing, the unified
-    // /v1/images/generations endpoint with a model:provider suffix)
-    // either 410'd, 400'd with "Model not supported by provider X", or
-    // 404'd outright. Their own docs route developers through the
-    // huggingface_hub client library specifically because it handles
-    // this model-to-provider translation internally — it isn't a stable
-    // public REST contract yet, so it isn't worth depending on here.
-    //
-    // Current chain: Pollinations, then Cloudflare, then (avatars only)
-    // a best-effort DiceBear fallback — see below.
+    // `limit: 0` free-tier quota for this project on every model tested.
+    // Hugging Face was removed the same day: no stable public REST contract
+    // for image models via Inference Providers.
     const pollinationsAttempt: ProviderAttempt = {
       name: "pollinations",
-      run: pollinationsFn,
+      timeoutMs,
+      run: (t) => kind === "avatar"
+        ? withPollinationsRetry((per) => generatePollinationsAvatar({ isExplicit }, prompt, per), t)
+        : withPollinationsRetry((per) => generatePollinationsBackground(isExplicit, prompt, per), t),
       breaker: pollinationsBreaker,
     };
     const cloudflareAttempt: ProviderAttempt = {
       name: "cloudflare",
-      breaker: cloudflareBreaker,
-      run: () => generateCloudflareImage(
+      timeoutMs: cloudflareImageTimeoutMs(),
+      // Klein cost/latency scales with pixels. Backgrounds are rendered at
+      // 1536x864 (16:9, multiples of 16); the background route upscales and
+      // crops to 1920x1080 afterwards.
+      run: (t) => generateCloudflareImage(
         prompt,
-        cloudflareImageTimeoutMs(),
-        // 1280x720 is ~2.3x fewer pixels than 1920x1080 (faster, cheaper);
-        // the background route upscales to 1920x1080 with sharp afterwards.
-        kind === "avatar" ? { width: 1024, height: 1024 } : { width: 1280, height: 720 }
+        t,
+        kind === "avatar" ? { width: 1024, height: 1024 } : { width: 1536, height: 864 }
       ),
+      breaker: cloudflareBreaker,
     };
 
-    // Cloudflare first (when configured): Pollinations' free tier is capped at
-    // 1 image/45s/IP and is usually at capacity, so it fails most calls.
-    // Override with IMAGE_PROVIDER_ORDER=pollinations,cloudflare if desired.
-    const chain: ProviderAttempt[] = (process.env.IMAGE_PROVIDER_ORDER || "cloudflare,pollinations")
-      .split(",").map((n) => n.trim().toLowerCase())
-      .map((n) => (n === "cloudflare" ? cloudflareAttempt : n === "pollinations" ? pollinationsAttempt : null))
-      .filter((a): a is ProviderAttempt => a !== null);
-    if (!chain.length) chain.push(cloudflareAttempt, pollinationsAttempt);
+    const chain: ProviderAttempt[] = isExplicit
+      ? [pollinationsAttempt, cloudflareAttempt]
+      : [cloudflareAttempt, pollinationsAttempt];
 
     const errors: string[] = [];
 
-    // Hedged chain: providers are still tried in priority order, but if the
-    // current one hasn't answered within IMAGE_HEDGE_SECONDS (default 8s) the
-    // next one starts IN PARALLEL and the first valid image wins. A fast
-    // failure starts the next provider immediately. Worst case is now ~hedge +
-    // fallback time instead of (timeout of the first) + (timeout of the next).
-    const hedgeMs = imageHedgeMs();
-    const winner = await new Promise<ImageGenJobResult | null>((resolve) => {
-      let next = 0;
-      let inFlight = 0;
-      let settled = false;
-      let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
-
-      const finish = (r: ImageGenJobResult | null) => {
-        if (settled) return;
-        settled = true;
-        if (hedgeTimer) clearTimeout(hedgeTimer);
-        resolve(r);
-      };
-
-      const startNext = () => {
-        if (settled) return;
-        if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = undefined; }
-        while (next < chain.length) {
-          const attempt = chain[next++];
-          if (attempt.name === "cloudflare" && !isCloudflareConfigured()) {
-            errors.push("cloudflare: not configured");
-            continue;
-          }
-          if (attempt.breaker?.isOpen()) {
-            errors.push(`${attempt.name}: circuit breaker open, skipped`);
-            continue;
-          }
-          inFlight++;
-          const startedAt = Date.now();
-          (async () => {
-            const bytes = await attempt.run();
-            // Validate inside the attempt so corrupt/HTML success responses
-            // trigger fallback instead of failing later during upload.
-            await validateGeneratedImage(bytes);
-            return bytes;
-          })().then(
-            (bytes) => {
-              inFlight--;
-              attempt.breaker?.reset();
-              if (settled) {
-                console.log(`[avatar] ${attempt.name} finished after ${Date.now() - startedAt}ms but another provider already won`);
-                return;
-              }
-              console.log(`[avatar] ${attempt.name} ok in ${Date.now() - startedAt}ms`);
-              finish({ bytes, provider: attempt.name });
-            },
-            (err) => {
-              inFlight--;
-              const msg = err instanceof Error ? err.message : String(err);
-              console.warn(`[avatar] ${attempt.name} failed after ${Date.now() - startedAt}ms: ${msg.slice(0, 300)}`);
-              errors.push(`${attempt.name}: ${msg}`);
-              // withPollinationsRetry() already trips its own breaker
-              // internally; avoid double-tripping it here.
-              if (attempt.breaker && attempt.name !== "pollinations") {
-                if (isRateLimitError(err)) attempt.breaker.trip(err);
-                else if (isTimeoutError(err)) attempt.breaker.recordTimeout();
-              }
-              if (settled) return;
-              if (next < chain.length) startNext();          // fast-fail: go straight to the next provider
-              else if (inFlight === 0) finish(null);          // nothing left anywhere
-            }
-          );
-          // More providers waiting? Hedge after hedgeMs if this one is slow.
-          if (hedgeMs > 0 && next < chain.length) hedgeTimer = setTimeout(startNext, hedgeMs);
-          return;
+    for (const attempt of chain) {
+      if (attempt.name === "cloudflare" && !isCloudflareConfigured()) {
+        errors.push("cloudflare: not configured");
+        continue;
+      }
+      if (attempt.breaker?.isOpen()) {
+        errors.push(`${attempt.name}: circuit breaker open, skipped`);
+        continue;
+      }
+      const remainingMs = budgetMs - (Date.now() - startedAt);
+      if (remainingMs < MIN_ATTEMPT_MS) {
+        errors.push(`${attempt.name}: skipped, total time budget used up`);
+        continue;
+      }
+      try {
+        const bytes = await attempt.run(Math.min(attempt.timeoutMs, remainingMs));
+        // Validate while still inside the provider attempt so corrupt/HTML
+        // success responses trigger fallback instead of failing during upload.
+        await validateGeneratedImage(bytes);
+        attempt.breaker?.reset();
+        return { bytes, provider: attempt.name };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[avatar] ${attempt.name} failed: ${msg.slice(0, 300)}`);
+        errors.push(`${attempt.name}: ${msg}`);
+        // withPollinationsRetry() already trips its own breaker
+        // internally on a final rate-limit/timeout failure; avoid
+        // double-tripping it here.
+        if (attempt.breaker && attempt.name !== "pollinations") {
+          if (isRateLimitError(err) || CLOUDFLARE_QUOTA_RE.test(msg)) attempt.breaker.trip(err);
+          else if (isTimeoutError(err)) attempt.breaker.recordTimeout();
         }
-        // Ran out of providers without starting one.
-        if (inFlight === 0) finish(null);
-      };
-
-      startNext();
-    });
-    if (winner) return winner;
+      }
+    }
 
     // Best-effort final fallback for avatars only (DiceBear has no
     // background/scene equivalent): every real AI provider failed, so
@@ -350,7 +283,8 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
     // one each time.
     if (kind === "avatar") {
       try {
-        const bytes = await generateDicebearAvatar(prompt, timeoutMs);
+        // DiceBear is a fast procedural fallback: give it a short, bounded slice even when the budget is spent.
+        const bytes = await generateDicebearAvatar(prompt, Math.min(timeoutMs, Math.max(MIN_ATTEMPT_MS, budgetMs - (Date.now() - startedAt))));
         await validateGeneratedImage(bytes);
         return { bytes, provider: "dicebear-fallback" };
       } catch (err) {
@@ -368,9 +302,6 @@ export async function processImageGen(data: ImageGenJobData): Promise<ImageGenJo
 export function startImageGenWorker(): void {
   console.log("[image-queue] Using in-memory queue (BullMQ Postgres backend disabled)");
 }
-
-// Printed once at boot so the Render logs show the timeouts actually in effect.
-console.log(`[image-gen] timeouts: default=${imageTimeoutMs() / 1000}s pollinations=${pollinationsImageTimeoutMs() / 1000}s cloudflare=${cloudflareImageTimeoutMs() / 1000}s hedge=${imageHedgeMs() / 1000}s order=${process.env.IMAGE_PROVIDER_ORDER || "cloudflare,pollinations"}`);
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -419,16 +350,12 @@ router.post("/:id/avatar/generate", asyncHandler(async (req, res) => {
   const prompt = buildAvatarPrompt(character, customPrompt);
 
   try {
-    const t0 = Date.now();
     const result = await processImageGen({ prompt, isExplicit: !!character.isExplicit, kind: "avatar" });
-    const t1 = Date.now();
-    const cleanBytes = await finalizeGeneratedImage(result.bytes);
-    const t2 = Date.now();
+    const cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
     const publicId = `${req.params.id}-${Date.now()}-generated`;
     const avatarUrl = await uploadAvatarBuffer(cleanBytes, publicId);
-    const t3 = Date.now();
     const updated = await prisma.character.update({ where: { id: req.params.id }, data: { avatarUrl } });
-    console.log(`[avatar] generated via ${result.provider} — generate ${t1 - t0}ms, process ${t2 - t1}ms (${result.bytes.length}->${cleanBytes.length}B), upload ${t3 - t2}ms, db ${Date.now() - t3}ms`);
+    console.log(`[avatar] generated via ${result.provider}`);
     return res.json({ character: updated, imageGeneration: { provider: result.provider, isFallback: result.provider === "dicebear-fallback" } });
   } catch (err) {
     console.error("Avatar generation failed", err);
@@ -461,16 +388,18 @@ router.post("/:id/background/generate", asyncHandler(async (req, res) => {
   const prompt = buildBackgroundPrompt(character, customPrompt);
 
   try {
-    const t0 = Date.now();
     const result = await processImageGen({ prompt, isExplicit: !!character.isExplicit, kind: "background" });
-    const t1 = Date.now();
-    const cleanBytes = await finalizeGeneratedImage(result.bytes, { width: 1920, height: 1080 });
-    const t2 = Date.now();
+    let cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
+    if (cleanBytes.length) {
+      cleanBytes = await sharp(cleanBytes)
+        .resize(1920, 1080, { fit: "cover" })
+        .toBuffer()
+        .catch(() => cleanBytes);
+    }
     const publicId = `${req.params.id}-${Date.now()}-bg`;
     const backgroundUrl = await uploadAvatarBuffer(cleanBytes, publicId);
-    const t3 = Date.now();
     const updated = await prisma.character.update({ where: { id: req.params.id }, data: { backgroundUrl } });
-    console.log(`[background] generated via ${result.provider} — generate ${t1 - t0}ms, process ${t2 - t1}ms (${result.bytes.length}->${cleanBytes.length}B), upload ${t3 - t2}ms, db ${Date.now() - t3}ms`);
+    console.log(`[background] generated via ${result.provider}`);
     return res.json({ character: updated, imageGeneration: { provider: result.provider, isFallback: result.provider === "dicebear-fallback" } });
   } catch (err) {
     console.error("Background generation failed", err);

@@ -14,10 +14,6 @@ const MODEL = process.env.CLOUDFLARE_IMAGE_MODEL || "@cf/black-forest-labs/flux-
 // Guidance is supported by FLUX.2 Klein and Leonardo Phoenix. The model-
 // specific request builder below only includes it for compatible families.
 const GUIDANCE = Number(process.env.CLOUDFLARE_IMAGE_GUIDANCE || "7");
-// Klein is a distilled model (steps fixed at 4); guidance is optional and only
-// sent when CLOUDFLARE_IMAGE_GUIDANCE is set explicitly, so we don't push a
-// high value (7) at a model tuned for low guidance.
-const KLEIN_GUIDANCE_EXPLICIT = Boolean(process.env.CLOUDFLARE_IMAGE_GUIDANCE);
 
 type CloudflareImageSize = { width?: number; height?: number };
 
@@ -34,7 +30,7 @@ function buildKleinMultipartBody(prompt: string, size?: CloudflareImageSize): Fo
   const form = new FormData();
   form.append("prompt", prompt);
 
-  if (KLEIN_GUIDANCE_EXPLICIT && Number.isFinite(GUIDANCE)) {
+  if (Number.isFinite(GUIDANCE)) {
     form.append("guidance", String(GUIDANCE));
   }
   if (size?.width) form.append("width", String(size.width));
@@ -79,9 +75,54 @@ export async function generateCloudflareImage(
   if (!accountId || !apiToken) throw new Error("CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN not set");
   if (!MODEL) throw new Error("CLOUDFLARE_IMAGE_MODEL is set but empty — provide a valid model name");
 
-  const model = MODEL;
-  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+  // `timeoutMs` is the TOTAL budget for this call, including the one retry
+  // below, so a retry can never push the request past the configured limit.
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const remaining = deadline - Date.now();
+    if (attempt > 1 && remaining < MIN_RETRY_BUDGET_MS) break;
+    try {
+      return await requestOnce(accountId, apiToken, MODEL, prompt, remaining, size);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === MAX_ATTEMPTS || !isTransientCloudflareError(err)) throw err;
+      console.warn(`[cloudflare-image] transient failure (attempt ${attempt}), retrying: ${errorMessage(err).slice(0, 200)}`);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 
+const MAX_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 1000;
+const MIN_RETRY_BUDGET_MS = 10_000;
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// Retry only failures that are plausibly momentary: 5xx responses, Cloudflare's
+// "capacity temporarily exceeded" (3040), and dropped connections. Timeouts,
+// auth errors, bad requests and quota/rate-limit errors are NOT retried — a
+// retry would only burn more of the budget (or more neurons) for the same result.
+function isTransientCloudflareError(err: unknown): boolean {
+  const msg = errorMessage(err);
+  if (/timed out|aborted/i.test(msg)) return false;
+  if (/API error 5\d\d/.test(msg)) return true;
+  if (/\b3040\b|capacity temporarily exceeded/i.test(msg)) return true;
+  return err instanceof TypeError && /fetch failed|network|socket|ECONNRESET|ENOTFOUND|EAI_AGAIN/i.test(`${msg} ${(err as any).cause?.code ?? ""}`);
+}
+
+async function requestOnce(
+  accountId: string,
+  apiToken: string,
+  model: string,
+  prompt: string,
+  timeoutMs: number,
+  size?: CloudflareImageSize
+): Promise<Buffer> {
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
 
   const klein = isKleinModel(model);
   const body: BodyInit = klein
