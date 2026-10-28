@@ -7,6 +7,7 @@ import { prisma } from "../lib/db";
 import { getCurrentUserId } from "../lib/auth";
 import sharp from "sharp";
 import { inspectImage } from "../lib/imageValidation";
+import { finalizeGeneratedImage } from "../lib/finalizeImage";
 import { imageTimeoutMs, cloudflareImageTimeoutMs, requestMediaResource } from "../lib/providers/mediaHttp";
 import { uploadAvatarBuffer } from "../lib/b2";
 import { generateCloudflareImage, isCloudflareConfigured } from "../lib/providers/cloudflare";
@@ -365,12 +366,16 @@ router.post("/:id/avatar/generate", asyncHandler(async (req, res) => {
   const prompt = buildAvatarPrompt(character, customPrompt);
 
   try {
+    const t0 = Date.now();
     const result = await processImageGen({ prompt, isExplicit: !!character.isExplicit, kind: "avatar" });
-    const cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
+    const t1 = Date.now();
+    const cleanBytes = await finalizeGeneratedImage(result.bytes);
+    const t2 = Date.now();
     const publicId = `${req.params.id}-${Date.now()}-generated`;
     const avatarUrl = await uploadAvatarBuffer(cleanBytes, publicId);
+    const t3 = Date.now();
     const updated = await prisma.character.update({ where: { id: req.params.id }, data: { avatarUrl } });
-    console.log(`[avatar] generated via ${result.provider}`);
+    console.log(`[avatar] generated via ${result.provider} — generate ${t1 - t0}ms, process ${t2 - t1}ms (${result.bytes.length}->${cleanBytes.length}B), upload ${t3 - t2}ms, db ${Date.now() - t3}ms`);
     return res.json({ character: updated, imageGeneration: { provider: result.provider, isFallback: result.provider === "dicebear-fallback" } });
   } catch (err) {
     console.error("Avatar generation failed", err);
@@ -403,18 +408,16 @@ router.post("/:id/background/generate", asyncHandler(async (req, res) => {
   const prompt = buildBackgroundPrompt(character, customPrompt);
 
   try {
+    const t0 = Date.now();
     const result = await processImageGen({ prompt, isExplicit: !!character.isExplicit, kind: "background" });
-    let cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
-    if (cleanBytes.length) {
-      cleanBytes = await sharp(cleanBytes)
-        .resize(1920, 1080, { fit: "cover" })
-        .toBuffer()
-        .catch(() => cleanBytes);
-    }
+    const t1 = Date.now();
+    const cleanBytes = await finalizeGeneratedImage(result.bytes, { width: 1920, height: 1080 });
+    const t2 = Date.now();
     const publicId = `${req.params.id}-${Date.now()}-bg`;
     const backgroundUrl = await uploadAvatarBuffer(cleanBytes, publicId);
+    const t3 = Date.now();
     const updated = await prisma.character.update({ where: { id: req.params.id }, data: { backgroundUrl } });
-    console.log(`[background] generated via ${result.provider}`);
+    console.log(`[background] generated via ${result.provider} — generate ${t1 - t0}ms, process ${t2 - t1}ms (${result.bytes.length}->${cleanBytes.length}B), upload ${t3 - t2}ms, db ${Date.now() - t3}ms`);
     return res.json({ character: updated, imageGeneration: { provider: result.provider, isFallback: result.provider === "dicebear-fallback" } });
   } catch (err) {
     console.error("Background generation failed", err);

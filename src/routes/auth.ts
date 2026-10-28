@@ -18,6 +18,7 @@ import {
 import { checkRateLimit, getClientIp } from "../lib/rateLimit";
 import { sendMail } from "../lib/mailer";
 import { uploadAvatarBuffer } from "../lib/b2";
+import { finalizeGeneratedImage } from "../lib/finalizeImage";
 import { processImageGen } from "./avatar";
 
 const router = Router();
@@ -505,7 +506,7 @@ router.post("/avatar/generate", asyncHandler(async (req, res) => {
 
   try {
     const result = await processImageGen({ prompt, isExplicit: !!user.explicitMode, kind: "avatar" });
-    const cleanBytes = await sharp(result.bytes).sharpen().toBuffer().catch(() => result.bytes);
+    const cleanBytes = await finalizeGeneratedImage(result.bytes);
     const publicId = `user-${userId}-${Date.now()}-generated`;
     const avatarUrl = await uploadAvatarBuffer(cleanBytes, publicId);
     const updated = await prisma.user.update({
