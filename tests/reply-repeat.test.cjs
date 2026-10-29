@@ -71,7 +71,7 @@ test('the saved reply is cleaned against the earlier replies', () => {
 test('prompt rules tell the character to follow the requested language and never loop', () => {
   assert.match(CONVERSATION_AWARENESS_RULES, /LANGUAGE:.*switch immediately/s);
   assert.match(CONVERSATION_AWARENESS_RULES, /NO LOOPS:/);
-  assert.match(CONVERSATION_AWARENESS_RULES, /REACTION:.*not from a formula.*Many turns need no exclamation/s);
+  assert.match(CONVERSATION_AWARENESS_RULES, /REACTION:.*never from a habit.*Most turns are ordinary and need no exclamation.*Never add one as filler/s);
   assert.doesNotMatch(CONVERSATION_AWARENESS_RULES, /REACTION SIZE|never open with a calm summary/);
   assert.match(CONVERSATION_AWARENESS_RULES, /NO INVENTED HISTORY:.*family, past, or relationships/s);
   assert.match(CONVERSATION_AWARENESS_RULES, /NATURAL TURN:.*Mirror the user's format.*never narrate what the user's body feels/s);

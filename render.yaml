@@ -66,8 +66,11 @@ services:
         sync: false
       - key: GROQ_API_KEY_4
         sync: false
+      # Set GROQ_MODEL / NVIDIA_MODEL in the Render dashboard; sync: false keeps a blueprint sync from overwriting them.
       - key: GROQ_MODEL
-        value: "qwen/qwen3.6-27b"
+        sync: false
+      - key: NVIDIA_MODEL
+        sync: false
       - key: NVIDIA_API_KEY
         sync: false
       - key: NVIDIA_API_KEY_2

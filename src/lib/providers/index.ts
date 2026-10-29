@@ -535,7 +535,7 @@ export const SUMMARIZE_TRIGGER = 15;
 // engine, including Chocolate and Hazelnut. All configured NVIDIA key slots
 // are attempted before the chain moves to Groq.
 //
-// Groq is second: qwen/qwen3.6-27b. It is the first cross-provider fallback
+// Groq is second (GROQ_MODEL, a Qwen 3.x model). It is the first cross-provider fallback
 // when all usable NVIDIA slots have been skipped or failed before any visible
 // reply was emitted. It never gets an engine-specific priority boost.
 //

@@ -2,7 +2,8 @@ import { streamOpenAICompatibleChat, completeOpenAICompatibleChat } from "./open
 import type { GenParams } from "./index";
 
 const BASE_URL = "https://integrate.api.nvidia.com/v1";
-// Current default: minimaxai/minimax-m3 — confirmed working on NVIDIA's
+// Current default: nvidia/nemotron-3.5-super-vl-120b-a12b (set NVIDIA_MODEL in
+// Render to override). Previously minimaxai/minimax-m3 — confirmed working on NVIDIA's
 // Free Endpoint for this account. This is now the model that answers
 // first for every chat request (SFW and NSFW alike), since the chain no
 // longer reorders away from NVIDIA-first for premium or explicit chats — see buildChain in
@@ -45,7 +46,7 @@ const BASE_URL = "https://integrate.api.nvidia.com/v1";
 // file: set NVIDIA_MODEL in the Render dashboard (Environment tab) and
 // redeploy — no zip re-upload needed. The string below is only the
 // fallback used when NVIDIA_MODEL isn't set at all.
-const MODEL = process.env.NVIDIA_MODEL || "minimaxai/minimax-m3";
+const MODEL = process.env.NVIDIA_MODEL || "nvidia/nemotron-3.5-super-vl-120b-a12b";
 
 // See MODEL comment above — Nemotron Nano's reasoning toggle is a literal
 // token inside a system message, not a request-body field, and only
@@ -105,7 +106,9 @@ export function getNvidiaKeys(): { key: string; slot: number }[] {
 // which covers every current Nemotron 3-generation chat model without
 // having to hardcode each one by name as NVIDIA adds/retires them.
 const IS_NEMOTRON_3_FAMILY = /^nvidia\/nemotron-(3|nano-3|3\.5)/.test(MODEL);
-const IS_NEMOTRON_3_SUPER = /^nvidia\/nemotron-3-super(?:-|$)/.test(MODEL);
+// Covers nemotron-3-super-120b-a12b and nemotron-3.5-super-vl-120b-a12b (NVIDIA
+// documents temperature 1.0 / top_p 0.95 for both).
+const IS_NEMOTRON_3_SUPER = /^nvidia\/nemotron-3(?:\.5)?-super(?:-|$)/.test(MODEL);
 
 function genParamsExtraBody(params?: GenParams): Record<string, unknown> | undefined {
   const body: Record<string, unknown> = {};

@@ -64,7 +64,9 @@ export function getGroqKeys(): { key: string; slot: number }[] {
 // Override with GROQ_REASONING_EFFORT=default if you ever want thinking
 // mode back (e.g. testing a task that actually benefits from it).
 const IS_REASONING_MODEL = MODEL.startsWith("qwen/");
-const SUPPORTS_REASONING_EFFORT = /^qwen\/qwen3(\.\d+)?-\d+b$/.test(MODEL);
+// Matches qwen3.x size variants (qwen3.6-27b, qwen3.8-27b) and the Flash line
+// (qwen3.8-flash, qwen3.8-flash-next), all of which take reasoning_effort.
+const SUPPORTS_REASONING_EFFORT = /^qwen\/qwen3(\.\d+)?-(?:\d+b|flash(?:-next)?)$/.test(MODEL);
 const REASONING_EFFORT = process.env.GROQ_REASONING_EFFORT === "default" ? "default" : "none";
 const REASONING_EXTRA_BODY = IS_REASONING_MODEL
   ? {
