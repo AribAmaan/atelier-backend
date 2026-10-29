@@ -5,7 +5,7 @@ const { splitRoleplayInput, formatRoleplayInput, buildRoleplayTurnGuard, ROLEPLA
 const { selectHazelnutContext } = require('../dist/lib/hazelnutContext');
 const { buildSystemPrompt, summarizeConversation } = require('../dist/lib/providers');
 const { ROLEPLAY_ENGINES } = require('../dist/lib/providers/engines');
-const { replyProfile } = require('../dist/lib/providers/replyPolicy');
+const { replyProfile, classifyTurn, buildReplyGuidance, planReply } = require('../dist/lib/providers/replyPolicy');
 
 for (const marker of ['*', '**']) {
   test(`${marker} separates speech, private context, and subsequent speech`, () => {
@@ -121,10 +121,52 @@ test('Hazelnut standard-context mode also carries the narration rules', () => {
   }
 });
 
-test('engine response word limits remain unchanged', () => {
-  assert.deepEqual(Object.values(ROLEPLAY_ENGINES).map(e => {
-    const p = replyProfile(e.intelligence); return [p.ordinaryWords, p.minWords, p.maxWords];
-  }), [[35, 25, 45], [60, 50, 70], [100, 85, 110], [120, 105, 130]]);
+test('reply length has no word bounds: only a safety token ceiling per engine', () => {
+  assert.deepEqual(Object.values(ROLEPLAY_ENGINES).map(e => replyProfile(e.intelligence).tokens), [400, 600]);
+  for (const e of Object.values(ROLEPLAY_ENGINES)) {
+    const p = replyProfile(e.intelligence);
+    for (const key of ['minWords', 'maxWords', 'ordinaryWords']) assert.equal(p[key], undefined);
+    const plan = planReply(e.intelligence, 'hi');
+    for (const key of ['minWords', 'maxWords', 'targetWords']) assert.equal(plan[key], undefined);
+    assert.equal(plan.maxTokens, p.tokens);
+  }
+});
+
+test('turn weight follows the user message, not the engine', () => {
+  assert.equal(classifyTurn('hi'), 'light');
+  assert.equal(classifyTurn('yes *nods*'), 'light');
+  assert.equal(classifyTurn('Do you want to get some coffee with me later today?'), 'normal');
+  assert.equal(classifyTurn('hi', 'move the scene to the beach'), 'normal');
+  assert.equal(classifyTurn('word '.repeat(60)), 'heavy');
+  assert.equal(classifyTurn('one\n\ntwo\n\nthree'), 'heavy');
+  for (const e of Object.values(ROLEPLAY_ENGINES)) {
+    assert.equal(planReply(e.intelligence, 'hi').weight, 'light');
+    assert.equal(planReply(e.intelligence, 'word '.repeat(60)).weight, 'heavy');
+  }
+});
+
+test('reply guidance is context-based: no word counts, no quota, no padding', () => {
+  for (const e of Object.values(ROLEPLAY_ENGINES)) {
+    for (const weight of ['light', 'normal', 'heavy']) {
+      const text = buildReplyGuidance(e.intelligence, weight);
+      assert.match(text, /REPLY LENGTH/);
+      assert.match(text, /never to a quota/);
+      assert.match(text, /Stop as soon as the beat is complete/);
+      assert.match(text, /finish every sentence/);
+      assert.doesNotMatch(text, /\d+\s*(?:–|-|to)\s*\d+ words|hard ceiling|TIER-LOCKED|envelope/i);
+    }
+  }
+  assert.match(buildReplyGuidance(4, 'light'), /light/);
+  assert.match(buildReplyGuidance(10, 'heavy'), /long or sets a scene/);
+});
+
+test('engine voice notes and prompts no longer force depth or length on small turns', () => {
+  for (const e of Object.values(ROLEPLAY_ENGINES)) {
+    assert.doesNotMatch(e.voiceNotes, /even when the user (?:only says|sends a greeting)|fixed response envelope|full normal response depth/i);
+  }
+  const prompt = buildSystemPrompt({ name: 'Abigail', tagline: '', personality: 'warm', backstory: '', roleplayNotes: '', examples: '[]', memorySummary: '' }, { engine: ROLEPLAY_ENGINES.vanilla, voiceNotes: ROLEPLAY_ENGINES.vanilla.voiceNotes });
+  assert.doesNotMatch(prompt, /fixed reply envelope|tier-locked|Hazelnut expresses|full normal tier depth/i);
+  assert.match(prompt, /REPLY LENGTH/);
 });
 
 test('memory provider request preserves privacy labels and contains corrective memory rules', async () => {
@@ -151,5 +193,29 @@ test('memory provider request preserves privacy labels and contains corrective m
     global.fetch = originalFetch;
     if (previousKey === undefined) delete process.env.NVIDIA_API_KEY;
     else process.env.NVIDIA_API_KEY = previousKey;
+  }
+});
+
+test('only two engines exist and retired ids resolve to the paid engine', () => {
+  const { getEngineConfig, resolveEngineForTier } = require('../dist/lib/providers/engines');
+  assert.deepEqual(Object.keys(ROLEPLAY_ENGINES), ['vanilla', 'hazelnut']);
+  assert.equal(ROLEPLAY_ENGINES.vanilla.minTier, 'free');
+  assert.equal(ROLEPLAY_ENGINES.hazelnut.minTier, 'plus');
+  assert.equal(getEngineConfig('strawberry').id, 'hazelnut');
+  assert.equal(getEngineConfig('chocolate').id, 'hazelnut');
+  assert.equal(getEngineConfig('nonsense'), null);
+  const previous = process.env.ENFORCE_ENGINE_TIERS;
+  process.env.ENFORCE_ENGINE_TIERS = 'true';
+  try {
+    const free = resolveEngineForTier('hazelnut', 'free');
+    assert.equal(free.engine.id, 'vanilla');
+    assert.equal(free.downgradedFrom, 'hazelnut');
+    assert.equal(free.requiredTier, 'plus');
+    // Old ultra/supreme rows count as the paid plan; unknown values count as free.
+    for (const tier of ['plus', 'ultra', 'supreme']) assert.equal(resolveEngineForTier('hazelnut', tier).engine.id, 'hazelnut');
+    for (const tier of ['free', undefined, null, 'junk', 42]) assert.equal(resolveEngineForTier('hazelnut', tier).engine.id, 'vanilla');
+    assert.equal(resolveEngineForTier('vanilla', 'free').downgradedFrom, null);
+  } finally {
+    if (previous === undefined) delete process.env.ENFORCE_ENGINE_TIERS; else process.env.ENFORCE_ENGINE_TIERS = previous;
   }
 });

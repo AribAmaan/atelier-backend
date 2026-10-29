@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { streamCompleteReply } = require('../dist/lib/providers/completeReply');
 const { dropRepeatedSentences } = require('../dist/lib/providers/replyRepeat');
-const { depthContinuationSuffix } = require('../dist/lib/providers/completeReply');
 const { cleanAssistantResponse } = require('../dist/lib/providers');
 const { CONVERSATION_AWARENESS_RULES } = require('../dist/lib/conversationAwareness');
 
@@ -47,21 +46,6 @@ test('a reply that is only repeats is kept rather than emptied, unless a continu
   assert.equal(dropRepeatedSentences(t, [t], { allowEmpty: true }), '');
 });
 
-test('depth top-up that restarts the reply adds nothing', () => {
-  assert.equal(depthContinuationSuffix(first, first), '');
-  assert.equal(depthContinuationSuffix(first, `${first} `), '');
-});
-
-test('depth top-up that restarts and then adds new text keeps only the new text', () => {
-  const suffix = depthContinuationSuffix(first, `${first} She tugs you closer and does not look away.`);
-  assert.equal(suffix, ' She tugs you closer and does not look away.');
-});
-
-test('a normal depth top-up is untouched, with natural spacing', () => {
-  assert.equal(depthContinuationSuffix('She waits by the door.', 'Then she finally speaks, quietly.'), ' Then she finally speaks, quietly.');
-  assert.equal(depthContinuationSuffix('She waits by the door. ', 'Then she finally speaks, quietly.'), 'Then she finally speaks, quietly.');
-});
-
 test('the saved reply is cleaned against the earlier replies', () => {
   const prior = ['Tum meri zimmedari ho, aur main tumhe kisi aur ke paas nahi jaane dungi.'];
   const out = cleanAssistantResponse('Tum meri zimmedari ho, aur main tumhe kisi aur ke paas nahi jaane dungi. Ab baith jao aur batao kya hua.', 10, prior);
@@ -88,34 +72,51 @@ function fakeStream(outputs) {
   };
   return { stream, calls };
 }
-const params = { minWords: 20, targetWords: 24, maxWords: 60, continuationMaxTokens: 160 };
+const params = { continuationMaxTokens: 160 };
 const shortReply = 'She waits by the door, arms folded, watching you closely.';
 
-test('when the top-up only repeats, one more attempt asks for new sentences only', async () => {
-  const { stream, calls } = fakeStream([
-    shortReply,
-    `${shortReply}`,                                    // model restarts: nothing new
-    'Then she sighs and finally lets her shoulders drop. "Come in before the rain gets worse," she says quietly.',
-  ]);
+test('a short reply is saved as is: no padding call, no top-up', async () => {
+  const { stream, calls } = fakeStream(['Hey you.']);
   const shown = [];
   const result = await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], t => shown.push(t), undefined, params);
-  assert.equal(calls.length, 3);
-  assert.match(calls[2].at(-1).content, /only repeated sentences/);
-  assert.equal(result.text.split(shortReply).length, 2);          // reply appears once
-  assert.match(result.text, /Come in before the rain/);
-  assert.equal(shown.join(''), result.text);                      // what streamed equals what is saved
+  assert.equal(calls.length, 1);
+  assert.equal(result.text, 'Hey you.');
+  assert.equal(result.finishReason, 'stop');
+  assert.equal(result.continuations, 0);
+  assert.equal(shown.join(''), result.text);
 });
 
-test('a top-up that works the first time does not trigger a second call', async () => {
-  const { stream, calls } = fakeStream([shortReply, 'Then she sighs and finally lets her shoulders drop, and the room feels warmer.']);
-  const result = await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], () => {}, undefined, params);
+test('a long reply is never trimmed to a word limit', async () => {
+  const long = Array.from({ length: 40 }, (_, i) => `Sentence number ${i + 1} adds a little more to the scene.`).join(' ');
+  const { stream, calls } = fakeStream([long]);
+  const result = await streamCompleteReply(stream, [{ role: 'user', content: 'tell me everything' }], () => {}, undefined, params);
+  assert.equal(calls.length, 1);
+  assert.equal(result.text, long);
+  assert.ok(result.text.split(/\s+/).length > 300);
+});
+
+test('a reply cut off at the token ceiling is finished on the same provider', async () => {
+  const cut = 'She leans against the doorframe and says, "If you really want to know, then listen closely because I will only tell you once and';
+  const tail = cut.slice(-160);
+  const calls = [];
+  const stream = async (messages, onToken, _signal, p) => {
+    calls.push(messages);
+    if (calls.length === 1) { onToken(cut); p?.onFinish?.('length'); return cut; }
+    const out = `${tail} then it is yours to keep."`;
+    onToken(out); p?.onFinish?.('stop'); return out;
+  };
+  const shown = [];
+  const result = await streamCompleteReply(stream, [{ role: 'user', content: 'tell me' }], t => shown.push(t), undefined, params);
   assert.equal(calls.length, 2);
-  assert.match(result.text, /warmer\.$/);
+  assert.equal(result.continuations, 1);
+  assert.equal(result.text, `${cut} then it is yours to keep."`);
+  assert.equal(result.finishReason, 'stop');
+  assert.equal(shown.join(''), result.text);
 });
 
-test('two failed top-ups stop there and keep the original reply intact', async () => {
-  const { stream, calls } = fakeStream([shortReply, shortReply, shortReply]);
-  const result = await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], () => {}, undefined, params);
-  assert.equal(calls.length, 3);
-  assert.equal(result.text, shortReply);
+test('a short normal stop is never extended, even when it is a single word', async () => {
+  const { stream, calls } = fakeStream(['Mm.']);
+  const result = await streamCompleteReply(stream, [{ role: 'user', content: 'ok' }], () => {}, undefined, params);
+  assert.equal(calls.length, 1);
+  assert.equal(result.text, 'Mm.');
 });

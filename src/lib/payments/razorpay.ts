@@ -116,14 +116,19 @@ export const SPARK_PACK_PRICES: Record<SparkPackId, { sparks: number; amountInPa
   s10000: { sparks: 10000 + 4000, amountInPaise: 839900 }, // ₹8,399
 };
 
-export type MembershipTierId = "plus" | "ultra" | "supreme";
+/** The only purchasable plan. (Ultra and Supreme were retired; see normalizeMembershipTier in providers/engines.ts.) */
+export type MembershipTierId = "plus";
 export type BillingCycle = "monthly" | "quarterly" | "yearly";
 
 const MEMBERSHIP_MONTHLY_PAISE: Record<MembershipTierId, number> = {
-  plus: 109900, // ₹1,099 / mo
-  ultra: 169900, // ₹1,699 / mo
-  supreme: 419900, // ₹4,199 / mo
+  plus: 20000, // ₹200 / mo — keep in sync with MEMBERSHIP_TIERS in the frontend's lib/premium.ts
 };
+
+/** Accepts only the current paid plan id. Retired ids (ultra, supreme) are rejected for NEW orders
+ * so a stale client can never be charged a different price than the one it displayed. */
+export function isMembershipTierId(value: unknown): value is MembershipTierId {
+  return value === "plus";
+}
 
 // Mirrors cycleMultiplier() in the frontend's lib/premium.ts.
 function cycleMultiplier(cycle: BillingCycle): number {

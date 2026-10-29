@@ -28,9 +28,9 @@ import {
 import { estimateTokens, hazelnutContextEnabled, buildRecallQuery, recallTerms, selectHazelnutContext } from "../lib/hazelnutContext";
 import { withTokenAccounting } from "../lib/providers/tokenStats";
 import { planReply } from "../lib/providers/replyPolicy";
-import { buildRoleplayTurnGuard, formatRoleplayInput } from "../lib/roleplayInput";
+import { buildCastHandoffGuard, buildRoleplayTurnGuard, formatRoleplayInput } from "../lib/roleplayInput";
 import type { GenParams, TtsVoice } from "../lib/providers";
-import { resolveEngineForTier, type MembershipTier } from "../lib/providers/engines";
+import { resolveEngineForTier, normalizeMembershipTier } from "../lib/providers/engines";
 import { computeRelationshipLevel } from "../lib/relationship";
 
 const router = Router();
@@ -228,7 +228,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   }
   activeGenerations.add(characterId);
   try {
-  const membershipTier = (requestingUser?.membershipTier as MembershipTier | undefined) ?? "free";
+  const membershipTier = normalizeMembershipTier(requestingUser?.membershipTier);
 
   const body = req.body ?? {};
   const isRegenerate = body.regenerate === true;
@@ -281,8 +281,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   const voiceNotes = engine?.voiceNotes;
   const intelligence = engine?.intelligence ?? 5;
   const compactHazelnut = engine?.id === "hazelnut" && hazelnutContextEnabled();
-  // Provider priority is fixed for every engine, including Chocolate and
-  // Hazelnut: NVIDIA -> Groq -> SambaNova -> Cloudflare -> Ollama. Engine
+  // Provider priority is fixed for every engine, including Hazelnut: NVIDIA -> Groq -> SambaNova -> Cloudflare -> Ollama. Engine
   // quality remains controlled by prompt/context/sampling settings, not by
   // silently reordering providers.
   const maxTokens = maxTokensForIntelligence(intelligence);
@@ -390,7 +389,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   // maybeSummarize (below, after the reply streams) is about to fold it
   // into memorySummary. Slicing straight down to recentWindow here, before
   // that fold has actually happened, silently drops whatever sits between
-  // the two thresholds: e.g. Strawberry sends 11 messages verbatim but
+  // the two thresholds: e.g. Vanilla sends 8 messages verbatim but
   // only summarizes once there are 18 unsummarized, so messages 12-17 back
   // were neither shown raw nor folded into memory — just gone from the
   // model's context. maybeSummarize keeps `relevant` naturally bounded to
@@ -468,18 +467,24 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   // Fresh on every request, including engine switches and regeneration; never
   // cache turn-specific pacing inside the reusable character prompt.
   const latestUserText = [...recentHistory].reverse().find(m => m.role === "user")?.content ?? "";
+  // Other characters this user owns, so a scene handoff ("*amy comes in*") has a profile to speak from.
+  let castGuard = "";
+  try {
+    const cast = await prisma.character.findMany({
+      where: { ownerId: userId, id: { not: characterId } },
+      select: { name: true, personality: true, backstory: true },
+      take: 60,
+    });
+    castGuard = buildCastHandoffGuard(latestUserText, recentHistory.map((m: { content: string }) => m.content), cast);
+  } catch (err) { console.error("cast handoff lookup failed", err); }
   const replyPlan = planReply(intelligence, latestUserText, sceneDirective);
   genParams.maxTokens = replyPlan.maxTokens;
   genParams.continuationMaxTokens = replyPlan.continuationMaxTokens;
-  genParams.preserveStreamedLength = replyPlan.preserveStreamedLength;
-  genParams.targetWords = replyPlan.targetWords;
-  genParams.minWords = replyPlan.minWords;
-  genParams.maxWords = replyPlan.maxWords;
   chatMessages[0].content += `\n\n${replyPlan.instruction}`;
   // Include this per-turn guard in Hazelnut's context budgeting, not the cached
   // persona prompt. Keep it after recalled evidence at the provider boundary.
   const inputTurnGuard = buildAwarenessTurnGuard(relevant) +
-    (relevant[relevant.length - 1]?.role === "user" ? buildRoleplayTurnGuard(latestUserText) : "");
+    (relevant[relevant.length - 1]?.role === "user" ? buildRoleplayTurnGuard(latestUserText) : "") + castGuard;
   if (compactHazelnut) {
     const query = buildRecallQuery(relevant, sceneDirective);
     const terms = recallTerms(query);

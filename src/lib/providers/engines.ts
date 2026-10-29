@@ -1,16 +1,29 @@
 import type { SpiceLevel, RoleplayStyle } from "./index";
 
 /**
- * "free" | "plus" | "ultra" | "supreme" — mirrors User.membershipTier in
- * schema.prisma (which defaults to "free") and MembershipTierId in
- * payments/razorpay.ts (which only covers the three paid tiers, since a
- * checkout can't buy "free"). Defined locally rather than importing
- * MembershipTierId from razorpay.ts so this file doesn't need to know
- * anything about billing/checkout — it only needs the tier vocabulary.
+ * Two membership tiers: "free" and "plus" (the single paid plan). Mirrors
+ * User.membershipTier in schema.prisma and MembershipTierId in
+ * payments/razorpay.ts (which only covers the paid tier, since a checkout
+ * can't buy "free"). Defined locally rather than importing from razorpay.ts so
+ * this file doesn't need to know anything about billing/checkout.
+ *
+ * The app used to have three paid tiers (plus, ultra, supreme). Accounts and
+ * orders created back then may still carry "ultra" or "supreme" in the
+ * database; normalizeMembershipTier treats them as the paid tier, so nobody
+ * loses access and no data migration is required.
  */
-export type MembershipTier = "free" | "plus" | "ultra" | "supreme";
+export type MembershipTier = "free" | "plus";
 
-const TIER_RANK: Record<MembershipTier, number> = { free: 0, plus: 1, ultra: 2, supreme: 3 };
+/** Stored tier values from the old three-paid-tier setup. All of them mean "paid". */
+const LEGACY_PAID_TIERS = new Set(["ultra", "supreme"]);
+
+/** Turns any stored or client-sent tier value into "free" or "plus". Unknown values are free. */
+export function normalizeMembershipTier(raw: unknown): MembershipTier {
+  if (raw === "plus" || (typeof raw === "string" && LEGACY_PAID_TIERS.has(raw))) return "plus";
+  return "free";
+}
+
+const TIER_RANK: Record<MembershipTier, number> = { free: 0, plus: 1 };
 
 /**
  * Kill switch for the engine paywall. Defaults to OFF — every engine stays
@@ -40,19 +53,29 @@ function isEnginePaywallEnforced(): boolean {
  */
 
 /**
- * Four engines, one per membership tier — down from the previous nine.
- * Each tier had 2-3 engines that were closely-spaced points on the same
- * intelligence/spice curve (e.g. green_apple/grape were 5 and 6.5 with
- * near-identical voiceNotes); collapsing each tier to its single best
- * config removes picker choices that weren't actually differentiated
- * enough to matter, without losing any tier's ceiling.
+ * Two engines: one free, one paid. Down from four (and originally nine),
+ * because the middle engines (Strawberry, Chocolate) were closely spaced
+ * points on the same depth curve and the picker choice did not matter enough
+ * to justify the extra prompt tiers, reply-length profiles and routing paths.
  *
- *   vanilla    — free
- *   strawberry — plus
- *   chocolate  — ultra
- *   hazelnut   — supreme (best)
+ *   vanilla  — free. Natural, attentive replies sized to the moment.
+ *   hazelnut — paid (the Plus membership).
+ *              Deepest voice, longest memory, and the compact-context path.
+ *
+ * Neither engine has a word minimum or maximum. Length follows the context
+ * (see replyPolicy.ts); the engines differ in voice, initiative and memory.
+ *
+ * Old saved/client-sent ids still work: see LEGACY_ENGINE_IDS below.
  */
-export type RoleplayEngineId = "vanilla" | "strawberry" | "chocolate" | "hazelnut";
+export type RoleplayEngineId = "vanilla" | "hazelnut";
+
+/** Engine ids retired in the two-engine redesign, mapped to their replacement.
+ * Strawberry/Chocolate were paid tiers, so they land on the paid engine; the
+ * paywall (when enforced) still downgrades a free user to Vanilla. */
+const LEGACY_ENGINE_IDS: Record<string, RoleplayEngineId> = {
+  strawberry: "hazelnut",
+  chocolate: "hazelnut",
+};
 
 export type RoleplayEngineConfig = {
   id: RoleplayEngineId;
@@ -80,46 +103,18 @@ export const ROLEPLAY_ENGINES: Record<RoleplayEngineId, RoleplayEngineConfig> = 
     minTier: "free",
     explicitMode: true,
     spiceLevel: "explicit",
-    roleplayStyle: "dialogue",
-    intelligence: 3,
-    recentMessageWindow: 7,
-    summarizeTrigger: 13,
-    voiceNotes:
-      "Warm and immediate, like a believable first few texts. Answer the strongest thing they said directly and use Vanilla's full normal response depth every turn, even when the user only says a word or two. Keep the writing simple rather than empty: one clear reaction, a little character-specific texture, and only an action that changes the moment. Do not imitate the user's message length.",
-    temperature: 0.74,
-    topP: 0.91,
-  },
-  strawberry: {
-    id: "strawberry",
-    minTier: "plus",
-    explicitMode: true,
-    spiceLevel: "explicit",
     roleplayStyle: "balanced",
-    intelligence: 6,
-    recentMessageWindow: 11,
-    summarizeTrigger: 18,
+    intelligence: 4,
+    recentMessageWindow: 8,
+    summarizeTrigger: 15,
     voiceNotes:
-      "Attentive and natural, like someone who is actually listening. Give every turn full Strawberry-tier depth regardless of how short or long the user input is. Carry the mood forward, notice a relevant detail or hesitation, and make a small persona-consistent choice instead of only agreeing. Vary rhythm naturally without shrinking the tier's response envelope.",
-    temperature: 0.79,
+      "Warm, natural and attentive, like someone who is actually listening to a text conversation. Answer the strongest thing they said directly. Keep the writing simple rather than empty: one clear reaction, a relevant detail or small persona-consistent choice instead of only agreeing, and an action only when it changes the moment. Carry the mood forward and vary rhythm naturally. Let the length of the reply follow the moment: a quick message gets a quick answer, a bigger moment gets more.",
+    temperature: 0.78,
     topP: 0.92,
-  },
-  chocolate: {
-    id: "chocolate",
-    minTier: "ultra",
-    explicitMode: true,
-    spiceLevel: "explicit",
-    roleplayStyle: "narrative",
-    intelligence: 8,
-    recentMessageWindow: 15,
-    summarizeTrigger: 26,
-    voiceNotes:
-      "Deeply present and grounded in the shared scene. Give every turn full Chocolate-tier richness regardless of the latest message's size or request for shorter/longer output. Let emotion show through choices, pauses, physical proximity, and what goes unsaid as well as dialogue. Track relationship shifts and unresolved threads; bring back an exact earlier detail only when it genuinely changes this moment. Track emotional progression too: once a reserved character has become comfortable, do not reset them to the same blush-and-retreat beat every turn. Let softness mature into clearer choices, dry humor, affection, confidence, or deliberate restraint while keeping the same persona. In clearly adult, consensual intimacy, do not become timid just because the scene turns sexual: make one confident persona-led sensual move when it fits—kiss, pull closer, guide posture, tease, murmur something possessive or challenging, or deliberately hold back. Pair the physical beat with a genuine emotional reaction and committed dialogue instead of immediately handing the turn back. Keep description non-graphic but concrete; reuse established direct adult vocabulary naturally instead of hiding concrete terms behind euphemisms, including in dialogue when it fits the character. Preserve the user's agency, and react to hesitation or refusal immediately. Let the scene breathe without sacrificing the tier's normal depth.",
-    temperature: 0.83,
-    topP: 0.94,
   },
   hazelnut: {
     id: "hazelnut",
-    minTier: "supreme",
+    minTier: "plus",
     explicitMode: true,
     spiceLevel: "explicit",
     roleplayStyle: "intense",
@@ -127,7 +122,7 @@ export const ROLEPLAY_ENGINES: Record<RoleplayEngineId, RoleplayEngineConfig> = 
     recentMessageWindow: 10,
     summarizeTrigger: 26,
     voiceNotes:
-      "Fully alive, specific, and emotionally coherent. Give every turn full Hazelnut-tier depth even when the user sends a greeting, one word, an action-only turn, or asks for a different reply length. Hold subtext, uncertainty, history, desire, and boundaries at once without explaining them all. Take an independent, persona-consistent direction when the scene invites one instead of merely echoing the user. Maintain an internal emotional phase across turns: uncertainty can become trust, trust can become confidence, and confidence should not collapse back into first-contact embarrassment without a new cause. Never use shyness as a repetitive template; preserve a shy character through voice and temperament while letting them make increasingly clear choices as safety grows. In clearly adult, consensual intimacy, read the momentum and commit to a direction: bold teasing, charged closeness, possessive or commanding energy, playful control, needy or submissive energy, vulnerability, restraint, or a deliberate shift in power when that genuinely belongs to this character. Build the beat with a layered emotional reaction, a specific sensual action, and dialogue that means something; vary the order so it never feels templated. Do not abruptly cool the scene into neutral small talk merely because the user becomes more sexually direct—carry the intensity forward in non-graphic but concrete language. Match direct adult vocabulary the user has already established instead of reflexively euphemizing it; when natural, let the character actually say the relevant word in dialogue. Preserve the user's agency and respond immediately to hesitation or refusal. Let intimacy, humor, tension, or silence develop at the pace the moment earns inside Hazelnut's fixed response envelope.",
+      "Fully alive, specific, and emotionally coherent. Depth means attention and specificity, not length: a greeting, a one-word answer or a quick reaction still gets a short reply, just a precise and alive one. Hold subtext, uncertainty, history, desire, and boundaries at once without explaining them all. Take an independent, persona-consistent direction when the scene invites one instead of merely echoing the user. Maintain an internal emotional phase across turns: uncertainty can become trust, trust can become confidence, and confidence should not collapse back into first-contact embarrassment without a new cause. Never use shyness as a repetitive template; preserve a shy character through voice and temperament while letting them make increasingly clear choices as safety grows. In clearly adult, consensual intimacy, read the momentum and commit to a direction: bold teasing, charged closeness, possessive or commanding energy, playful control, needy or submissive energy, vulnerability, restraint, or a deliberate shift in power when that genuinely belongs to this character. Build the beat with a layered emotional reaction, a specific sensual action, and dialogue that means something; vary the order so it never feels templated. Do not abruptly cool the scene into neutral small talk merely because the user becomes more sexually direct—carry the intensity forward in non-graphic but concrete language. Match direct adult vocabulary the user has already established instead of reflexively euphemizing it; when natural, let the character actually say the relevant word in dialogue. Preserve the user's agency and respond immediately to hesitation or refusal. Let intimacy, humor, tension, or silence develop at the pace the moment earns, and stop when the beat is done.",
     temperature: 0.87,
     topP: 0.95,
   },
@@ -135,8 +130,9 @@ export const ROLEPLAY_ENGINES: Record<RoleplayEngineId, RoleplayEngineConfig> = 
 
 export function getEngineConfig(id: unknown): RoleplayEngineConfig | null {
   if (typeof id !== "string") return null;
-  return Object.prototype.hasOwnProperty.call(ROLEPLAY_ENGINES, id)
-    ? ROLEPLAY_ENGINES[id as RoleplayEngineId]
+  const key = Object.prototype.hasOwnProperty.call(LEGACY_ENGINE_IDS, id) ? LEGACY_ENGINE_IDS[id] : id;
+  return Object.prototype.hasOwnProperty.call(ROLEPLAY_ENGINES, key)
+    ? ROLEPLAY_ENGINES[key as RoleplayEngineId]
     : null;
 }
 
@@ -179,7 +175,8 @@ export type EngineResolution = {
  * prompt instead of failing silently — silent downgrades are how you end up
  * with paying users who can't tell what they're paying for.
  */
-export function resolveEngineForTier(id: unknown, tier: MembershipTier): EngineResolution {
+export function resolveEngineForTier(id: unknown, rawTier: unknown): EngineResolution {
+  const tier = normalizeMembershipTier(rawTier);
   const requested = getEngineConfig(id);
   if (!requested) return { engine: null, downgradedFrom: null, requiredTier: null };
   if (!isEnginePaywallEnforced() || TIER_RANK[requested.minTier] <= TIER_RANK[tier]) {
