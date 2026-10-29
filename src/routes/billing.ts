@@ -14,11 +14,10 @@ import {
   SPARK_PACK_PRICES,
   membershipAmountInPaise,
   nextRenewalDate,
-  isMembershipTierId,
   type SparkPackId,
+  type MembershipTierId,
   type BillingCycle,
 } from "../lib/payments/razorpay";
-import { normalizeMembershipTier } from "../lib/providers/engines";
 
 const router = Router();
 router.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
@@ -49,7 +48,7 @@ router.get("/me", asyncHandler(async (req, res) => {
   return res.json({
     paymentsLive: PAYMENTS_ENABLED && isRazorpayConfigured(),
     sparkBalance: user.sparkBalance,
-    membershipTier: normalizeMembershipTier(user.membershipTier),
+    membershipTier: user.membershipTier,
     membershipRenewsAt: user.membershipRenewsAt,
   });
 }));
@@ -115,10 +114,10 @@ router.post("/checkout/membership", asyncHandler(async (req, res) => {
     return res.status(429).json({ error: "Too many checkout attempts. Please slow down." });
   }
 
-  const tier: unknown = req.body?.tier;
+  const tier = req.body?.tier as MembershipTierId | undefined;
   const cycle = req.body?.cycle as BillingCycle | undefined;
-  if (!isMembershipTierId(tier)) {
-    return res.status(400).json({ error: "Unknown membership plan. Choose Plus." });
+  if (!tier || !["plus", "ultra", "supreme"].includes(tier)) {
+    return res.status(400).json({ error: "Unknown membership tier." });
   }
   if (!cycle || !["monthly", "quarterly", "yearly"].includes(cycle)) {
     return res.status(400).json({ error: "Unknown billing cycle." });
@@ -268,17 +267,16 @@ async function applyPaidOrder(orderId: string, razorpayPaymentId: string) {
         data: { sparkBalance: { increment: pricing.sparks } },
       });
     } else if (lockedOrder.kind === "membership" && lockedOrder.billingCycle) {
-      // Orders created before the two-tier change may still say "ultra"/"supreme"; they activate the paid plan.
       if (!["plus", "ultra", "supreme"].includes(lockedOrder.referenceId) || !["monthly", "quarterly", "yearly"].includes(lockedOrder.billingCycle)) throw new Error("Invalid stored membership order.");
       const users = await tx.$queryRaw<{ membershipTier: string; membershipRenewsAt: Date | null }[]>`
         SELECT \`membershipTier\`, \`membershipRenewsAt\` FROM \`User\` WHERE id = ${lockedOrder.userId} FOR UPDATE
       `;
       const user = users[0];
-      const from = user && normalizeMembershipTier(user.membershipTier) === "plus" && user.membershipRenewsAt && user.membershipRenewsAt > new Date() ? user.membershipRenewsAt : new Date();
+      const from = user?.membershipTier === lockedOrder.referenceId && user.membershipRenewsAt && user.membershipRenewsAt > new Date() ? user.membershipRenewsAt : new Date();
       await tx.user.update({
         where: { id: lockedOrder.userId },
         data: {
-          membershipTier: "plus",
+          membershipTier: lockedOrder.referenceId,
           membershipRenewsAt: nextRenewalDate(lockedOrder.billingCycle as BillingCycle, from),
         },
       });

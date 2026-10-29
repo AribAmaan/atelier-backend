@@ -1,13 +1,28 @@
 import type { GenParams } from "./index";
+import { clampReplyToWordCeiling, replySentenceEnds } from "./replyPolicy";
 import { dropRepeatedSentences } from "./replyRepeat";
 
 type Message = { role: "system" | "user" | "assistant"; content: string };
 type Stream = (messages: Message[], onToken: (text: string) => void, signal?: AbortSignal, params?: GenParams) => Promise<string>;
 
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Premium/locked tiers should not collapse to a one-liner just because a
+ * provider ignored the prompt. This is intentionally a single bounded
+ * same-provider continuation, not a regeneration: it preserves the reply
+ * already streamed and asks only for the missing depth.
+ */
+export function depthContinuationSuffix(previous: string, next: string): string {
+  return withoutRepeats(previous, rawDepthContinuationSuffix(previous, next));
+}
+
 /**
  * Models often ignore "do not restart" and re-send the opening of the reply
  * (sometimes with a new tail). Anything the reply already says is discarded so
- * a continuation can only add NEW text; if nothing new is left, no suffix.
+ * the top-up can only add NEW sentences; if nothing new is left, no suffix.
  */
 function withoutRepeats(previous: string, suffix: string): string {
   if (!suffix.trim()) return "";
@@ -16,20 +31,70 @@ function withoutRepeats(previous: string, suffix: string): string {
   return /^\s/.test(novel) || /\s$/.test(previous) || /^[,.;:!?]/.test(novel) ? novel : ` ${novel}`;
 }
 
-/**
- * Streams a reply exactly as the provider produces it. Nothing is trimmed,
- * capped or padded: reply length is decided by the model from the prompt
- * guidance. The only recovery is finishing a sentence the provider cut off
- * at the token ceiling, on the SAME provider, at most twice.
- */
+function rawDepthContinuationSuffix(previous: string, next: string): string {
+  next = next.trimStart();
+  if (!next) return "";
+  if (next.startsWith(previous)) return next.slice(previous.length);
+
+  // Strip a repeated tail if the model echoed a little context before
+  // continuing. Requiring a meaningful overlap avoids guessing joins.
+  for (let n = Math.min(previous.length, next.length); n >= 8; n--) {
+    const overlap = next.slice(0, n);
+    const wholeEnding = /[.!?。！？।॥]["'”’)*_\]]*$/.test(overlap) && countWords(overlap) >= 3;
+    if ((n >= 24 || wholeEnding) && previous.endsWith(overlap)
+      && (n === previous.length || /\s/.test(previous[previous.length - n - 1]))) return next.slice(n);
+  }
+
+  // Depth continuations are explicitly instructed to begin with NEW text, so
+  // an un-repeated completion can be appended safely with natural spacing.
+  const fresh = next.trimStart();
+  if (!fresh) return "";
+  return `${/\s$/.test(previous) || /^[,.;:!?]/.test(fresh) ? "" : " "}${fresh}`;
+}
+
+/** Same-provider recovery for token cutoffs plus one bounded tier-depth top-up after an abnormally short normal stop. */
 export async function streamCompleteReply(stream: Stream, messages: Message[], onToken: (text: string) => void, signal?: AbortSignal, params?: GenParams) {
   let reason = "unknown";
   const capture = (value: string) => { reason = value; };
+  const maxWords = params?.maxWords ?? 0;
+  const minWords = params?.minWords ?? 0;
 
-  let text = await stream(messages, onToken, signal, { ...params, onFinish: capture });
+  // Publish complete sentences for every capped tier. Holding the unfinished
+  // sentence prevents the final word ceiling from retracting visible text.
+  // Sentence-sized buffering adds no provider call or token allowance.
+  let streamedVisible = "";
+  let providerVisible = "";
+  const cappedOnToken = maxWords > 0 ? (chunk: string) => {
+    if (!chunk) return;
+    providerVisible = (providerVisible + chunk).trimStart();
+    let safeEnd = 0;
+    for (const end of replySentenceEnds(providerVisible)) {
+      if (countWords(providerVisible.slice(0, end)) > maxWords) break;
+      safeEnd = end;
+    }
+    if (safeEnd > streamedVisible.length) {
+      const addition = providerVisible.slice(streamedVisible.length, safeEnd);
+      streamedVisible = providerVisible.slice(0, safeEnd);
+      onToken(addition);
+    }
+  } : onToken;
+
+  const completed = await stream(messages, cappedOnToken, signal, { ...params, onFinish: capture });
+  const rawText = maxWords > 0 ? completed.trimStart() : completed;
+  let text = maxWords > 0 ? clampReplyToWordCeiling(rawText, maxWords, minWords) : rawText;
+  if (maxWords > 0 && text.startsWith(streamedVisible)) {
+    const deferred = text.slice(streamedVisible.length);
+    if (deferred) onToken(deferred);
+  }
+
   let continuations = 0;
 
-  while (reason === "length" && text.trim() && !signal?.aborted && continuations < 2) {
+  // If the model ignored the prompt and already ran past the tier ceiling,
+  // the saved/final reply is capped locally. Do not ask for an additional
+  // continuation merely because the provider itself stopped on max_tokens.
+  if (reason === "length" && maxWords > 0 && countWords(rawText) > maxWords) reason = "stop";
+
+  while (reason === "length" && text.trim() && !signal?.aborted && continuations < 2 && (!maxWords || countWords(text) < maxWords)) {
     continuations++;
     const anchor = text.slice(-160);
     const recovery: Message[] = [
@@ -51,12 +116,78 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
         if (reason === "stop" || reason === "length") reason = "length";
         break;
       }
-      text += suffix;
-      onToken(suffix);
+      const combined = maxWords > 0 ? clampReplyToWordCeiling(text + suffix, maxWords, minWords) : text + suffix;
+      const accepted = combined.startsWith(text) ? combined.slice(text.length) : "";
+      if (!accepted) {
+        if (reason === "stop" || reason === "length") reason = maxWords > 0 && countWords(text) >= maxWords ? "stop" : "length";
+        break;
+      }
+      text = combined;
+      onToken(accepted);
+      if (reason === "length" && maxWords > 0 && countWords(text) >= maxWords) reason = "stop";
     } catch {
       // Keep already-visible content; do not replace it with another provider.
       reason = "length";
       break;
+    }
+  }
+
+  // A normal provider stop can still be far below the server-owned tier
+  // minimum. Recover that once on the SAME provider so a greeting or tiny
+  // user message cannot collapse Chocolate/Hazelnut (or any other tier) into
+  // a one-liner. Unknown/content-filter/cancelled endings are never extended.
+  const minimumWords = params?.minWords ?? 0;
+  if (reason === "stop" && continuations < 2 && minimumWords > 0 && countWords(text) < minimumWords && text.trim() && !signal?.aborted) {
+    const targetWords = Math.max(minimumWords, params?.targetWords ?? minimumWords);
+    const currentWords = countWords(text);
+    const missingWords = Math.max(1, targetWords - currentWords);
+    const topUpPrompt = (retry: boolean) => retry
+      ? `Your previous continuation only repeated sentences that are already in the reply above. Write ONLY brand-new sentences that move the moment forward (a new line of dialogue, a new action, or a fresh reaction), roughly ${missingWords} words. Do not reuse any wording from the reply above, do not restart it, and do not take the user's turn. Start directly with the new text.`
+      : `The assistant reply above stopped too early for this engine's fixed tier envelope. Continue that SAME assistant turn only, adding roughly ${missingWords} words of natural character-specific dialogue, action, atmosphere, or subtext until the COMPLETE reply is near ${targetWords} words. Start directly with new continuation text; do not restart, summarize, repeat the existing opening, take the user's turn, or begin a new scene. Finish naturally.`;
+    // At most two attempts: if the model restarts the reply and the repeat
+    // guard leaves nothing new, ask once more for new sentences only, rather
+    // than leaving the reply below its tier minimum.
+    for (let attempt = 0; attempt < 2 && !signal?.aborted; attempt++) {
+      const recovery: Message[] = [
+        ...messages,
+        { role: "assistant", content: text },
+        { role: "system", content: topUpPrompt(attempt > 0) },
+      ];
+      let extensionReason = "unknown";
+      continuations++;
+      let accepted = "";
+      try {
+        const next = await stream(recovery, () => {}, signal, {
+          ...params,
+          // Scale the top-up budget to the amount actually missing. The old
+          // fixed 320-token allowance could turn a 30-word top-up into another
+          // full paragraph and push a 120-word tier close to 200 words.
+          maxTokens: Math.min(
+            params?.continuationMaxTokens ?? 160,
+            Math.max(64, Math.ceil(missingWords * 1.8 + 24))
+          ),
+          onFinish: value => { extensionReason = value; },
+        });
+        if (signal?.aborted) break;
+        const suffix = depthContinuationSuffix(text, next);
+        if (suffix) {
+          const combined = maxWords > 0 ? clampReplyToWordCeiling(text + suffix, maxWords, minimumWords) : text + suffix;
+          accepted = combined.startsWith(text) ? combined.slice(text.length) : "";
+          if (accepted) {
+            text = combined;
+            onToken(accepted);
+            // Reaching a word minimum does not finish a sentence. Preserve
+            // length/unknown/filter metadata so the UI can report a cutoff.
+            reason = extensionReason;
+            if (reason === "length" && maxWords > 0 && countWords(text) >= maxWords) reason = "stop";
+          }
+        }
+      } catch {
+        // A tier-depth top-up is best-effort. Keep the valid first completion
+        // instead of turning an otherwise successful reply into a provider fail.
+        break;
+      }
+      if (accepted) break;
     }
   }
 

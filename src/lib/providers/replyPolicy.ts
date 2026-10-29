@@ -1,33 +1,65 @@
 /**
- * Reply length follows the scene, not a quota.
+ * Reply length and quality are engine properties, not user-message properties.
+ * A one-word greeting, long narration, action-only turn, or a request to be
+ * "short"/"detailed" must not collapse or inflate the selected tier.
  *
- * There is no word minimum, word maximum or padding pass. A greeting gets a
- * short answer, a big emotional or plot-heavy turn gets room, and the reply
- * stops when the beat is done. Length is steered only by prompt guidance that
- * reads how heavy the user's latest turn is (see classifyTurn); nothing is cut
- * or extended after generation.
- *
- * `tokens` is a runaway guard, not a target: it only matters if a model loops
- * or ignores the guidance. If it is ever reached, the provider continuation in
- * completeReply.ts finishes the sentence instead of leaving it cut off.
+ * The word bands below are intentionally narrow enough to make engines feel
+ * consistent while leaving a little room to finish a sentence naturally.
  */
 export function replyProfile(intelligence: number) {
-  // Two engines: Vanilla (free, intelligence <= 5, which is also the manual
-  // slider default) and Hazelnut (paid). They differ in voice, initiative and
-  // memory, not in how long a reply is allowed to be.
-  if (intelligence <= 5) return {
+  if (intelligence <= 3) return {
     name: "Vanilla",
-    purpose: "natural, attentive conversation with a relevant reaction",
-    tokens: 400,
+    purpose: "quick, direct dialogue",
+    ordinaryWords: 35,
+    minWords: 25,
+    maxWords: 45,
+    tokens: 128,
+    detailedTokens: 128,
+  };
+  if (intelligence <= 5) return {
+    name: "Balanced",
+    purpose: "natural conversation",
+    ordinaryWords: 50,
+    minWords: 40,
+    maxWords: 60,
+    tokens: 144,
+    detailedTokens: 144,
+  };
+  if (intelligence <= 7) return {
+    name: "Strawberry",
+    purpose: "attentive conversation with a relevant reaction",
+    ordinaryWords: 60,
+    minWords: 50,
+    maxWords: 70,
+    // 104 tokens was too close to the 70-word ceiling for punctuation-heavy
+    // roleplay text and could end with finish_reason=length mid-sentence.
+    // 144 still keeps Strawberry materially cheaper than Chocolate while
+    // leaving enough room for a natural stop inside its 50–70 word envelope.
+    tokens: 144,
+    detailedTokens: 144,
+  };
+  if (intelligence <= 8.5) return {
+    name: "Chocolate",
+    purpose: "grounded atmosphere and emotional follow-through",
+    ordinaryWords: 100,
+    minWords: 85,
+    maxWords: 110,
+    tokens: 224,
+    detailedTokens: 224,
   };
   return {
     name: "Hazelnut",
     purpose: "precise character voice, subtext, continuity, and confident initiative",
-    tokens: 600,
+    ordinaryWords: 120,
+    minWords: 105,
+    maxWords: 130,
+    tokens: 256,
+    detailedTokens: 256,
   };
 }
 
-/** Sentence boundaries, used by the repeated-sentence guard in replyRepeat.ts. */
+
+/** Sentence boundaries shared by streaming and final word-cap reconciliation. */
 export function replySentenceEnds(text: string, final = false): number[] {
   const ends: number[] = [];
   const pattern = /[.!?。！？।॥]+["'”’)*_\]]*(?=\s|$)/gu;
@@ -57,52 +89,70 @@ function formatClosers(text: string): string {
   return stack.reverse().join("");
 }
 
-export type TurnWeight = "light" | "normal" | "heavy";
+/** Prefer a complete sentence inside the hard tier ceiling. */
+export function clampReplyToWordCeiling(text: string, maxWords: number, minWords = 0): string {
+  const clean = text.trim();
+  if (!clean || maxWords <= 0) return clean;
 
-function wordCount(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
+  const words = [...clean.matchAll(/\S+/g)];
+  // Preserve the provider text byte-for-byte when it is already inside the
+  // ceiling. This matters while streaming: trimming harmless trailing space
+  // here can make a later continuation emit an extra separator.
+  if (words.length <= maxWords) return text;
+
+  const hard = words[maxWords - 1];
+  const hardEnd = (hard.index ?? 0) + hard[0].length;
+  const prefix = clean.slice(0, hardEnd);
+
+  // Avoid collapsing a premium reply too far below its own minimum merely
+  // because an early sentence happens to end well before the tier ceiling.
+  const floorWord = Math.min(maxWords - 1, Math.max(0, Math.min(minWords, maxWords) - 1));
+  const floor = words[floorWord];
+  const floorEnd = floor ? (floor.index ?? 0) + floor[0].length : Math.floor(hardEnd * 0.7);
+
+  let boundary = -1;
+  let lastCompleteBoundary = -1;
+  for (const end of replySentenceEnds(prefix, true)) {
+    lastCompleteBoundary = end;
+    if (end >= floorEnd) boundary = end;
+  }
+  if (boundary > 0) return prefix.slice(0, boundary).trim();
+
+  // Completeness beats mechanically hitting the tier minimum. If the model
+  // started another long sentence that crosses the hard ceiling, keep the
+  // last complete sentence even when it is a little below minWords; the
+  // same-provider depth top-up can then add a fresh complete beat.
+  if (lastCompleteBoundary > 0) return prefix.slice(0, lastCompleteBoundary).trim();
+
+  // Last resort for one extremely long unpunctuated sentence: stay inside
+  // the hard ceiling and terminate it cleanly rather than returning an
+  // ellipsis that looks like a provider cutoff.
+  const clipped = prefix.replace(/[\s,;:—-]+$/g, '').trim();
+  const closed = formatClosers(clipped);
+  return (/[.!?。！？।॥][\"'”’)*_\]]*$/.test(clipped) ? clipped : clipped + '.') + closed;
+}
+
+export function buildReplyGuidance(intelligence: number): string {
+  const p = replyProfile(intelligence);
+  return `TIER-LOCKED REPLY ENVELOPE — ${p.name}: ${p.purpose}. Aim for around ${p.ordinaryWords} words, normally ${p.minWords}–${p.maxWords} words; ${p.maxWords} is the hard ceiling. These limits stay stable regardless of whether the latest user message is brief, long, narration, or requests another length. Answer its actual point and develop one coherent character beat to this tier's depth. Every sentence must contribute: a relevant response, choice, consequence, or useful detail. Do not pad with repeated emotions, gestures, recaps, or automatic questions. Start wrapping up before the ceiling; finish the current sentence instead of opening a new thread. Keep natural dialogue and character-specific initiative inside this length. Do not imitate earlier reply lengths or another engine.`;
 }
 
 /**
- * Cheap, language-agnostic read of how much the user's latest turn carries.
- * It is only a hint handed to the model; it never limits or extends output.
- *   light  — a greeting, a word or two, a quick yes/no/reaction
- *   normal — an ordinary message
- *   heavy  — a long message, several paragraphs, or a scene-setting turn
+ * The planner is deliberately input-invariant. It keeps the existing call
+ * signature because chat.ts passes the latest turn and scene directive, but
+ * those values must never change a named engine's length/quality budget.
  */
-export function classifyTurn(latestUserText: string, sceneDirective = ""): TurnWeight {
-  const text = (latestUserText || "").trim();
-  const words = wordCount(text);
-  const paragraphs = text.split(/\n\s*\n/).filter(part => part.trim()).length;
-  if (words >= 45 || paragraphs >= 3) return "heavy";
-  if (words <= 6 && !sceneDirective.trim()) return "light";
-  return "normal";
-}
-
-const WEIGHT_HINT: Record<TurnWeight, string> = {
-  light: "The latest user turn is light (a greeting, a few words, or a quick reaction). Keep the reply compact, usually two to four sentences, but still alive: a small *action or expression* plus a line or two of dialogue in the character's own voice.",
-  normal: "The latest user turn is an ordinary message. Answer at conversation size, usually one short paragraph: a visible *action or bit of atmosphere* woven with dialogue that shows real personality.",
-  heavy: "The latest user turn is long or sets a scene. It can earn a fuller, scene-rich reply (action, setting, dialogue, emotion), but only as long as there is real substance to respond to; still stop when the beat is done.",
-};
-
-export function buildReplyGuidance(intelligence: number, weight: TurnWeight = "normal"): string {
+export function planReply(intelligence: number, _latestUserText: string, _sceneDirective = "") {
   const p = replyProfile(intelligence);
-  return `REPLY LENGTH AND STYLE — ${p.name}: ${p.purpose}. Write like a real roleplay partner, not a chatbot: pair the character's spoken dialogue with a brief *action, expression, body language or sensory detail* (in asterisks, or whatever style this chat already uses) so the character's personality, mood and voice show in both. Even a short reply carries a little of this; never send bare plain words with no character in them, and vary the action each time. Size every reply to the moment, never to a quota. ${WEIGHT_HINT[weight]} If the user asks for something shorter or longer, do that. Quick banter, a one-word answer, or a simple question gets a compact reply; a revealing, emotional, plot-moving, or scene-setting moment gets more. Stop as soon as the beat is complete. Every sentence must add a reaction, choice, consequence, or useful detail; do not pad with repeated emotions, the same gesture again, long scenery, recaps, or a tacked-on question. Do not copy the length of your earlier replies, and finish every sentence you start.`;
-}
-
-/**
- * Per-turn reply plan. The latest turn only selects the guidance wording; the
- * token ceiling is fixed per engine and exists purely to stop runaway output.
- */
-export function planReply(intelligence: number, latestUserText: string, sceneDirective = "") {
-  const p = replyProfile(intelligence);
-  const weight = classifyTurn(latestUserText, sceneDirective);
   return {
-    mode: "context" as const,
-    weight,
+    mode: "tier" as const,
     maxTokens: p.tokens,
-    // Only used to finish a sentence the provider cut off at the ceiling.
-    continuationMaxTokens: 160,
-    instruction: buildReplyGuidance(intelligence, weight),
+    continuationMaxTokens: p.name === "Vanilla" ? 96 : p.name === "Strawberry" ? 128 : 160,
+    // Sentence-aware streaming uses the same boundaries as the final cap.
+    preserveStreamedLength: false,
+    targetWords: p.ordinaryWords,
+    minWords: p.minWords,
+    maxWords: p.maxWords,
+    instruction: buildReplyGuidance(intelligence),
   };
 }

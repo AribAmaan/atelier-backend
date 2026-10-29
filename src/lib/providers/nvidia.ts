@@ -115,7 +115,7 @@ function genParamsExtraBody(params?: GenParams): Record<string, unknown> | undef
 
   // Nemotron 3 Super is tuned around temperature=1.0 / top_p=0.95. Keep the
   // per-engine values for every other provider/model, but do not feed this
-  // model off-spec sampling values merely because Vanilla uses
+  // model off-spec sampling values merely because Vanilla/Strawberry use
   // lower temperatures elsewhere in the fallback chain.
   if (IS_NEMOTRON_3_SUPER) {
     body.temperature = 1.0;
@@ -137,9 +137,10 @@ function genParamsExtraBody(params?: GenParams): Record<string, unknown> | undef
 
 function effectiveMaxTokens(params?: GenParams): number {
   // Reasoning is explicitly disabled above, so adding a blanket +512 token
-  // "reasoning buffer" is counterproductive: it only lets a runaway reply grow
-  // longer. Use the engine's safety ceiling and let the bounded same-provider
-  // continuation finish a sentence if the provider really hits it.
+  // "reasoning buffer" is counterproductive: it lets short tiers generate
+  // far past their word envelope and forces the server to cut the visible
+  // reply afterward. Use the tier's real generation budget and let the
+  // bounded same-provider continuation recover an actual length finish.
   return params?.maxTokens ?? 1024;
 }
 

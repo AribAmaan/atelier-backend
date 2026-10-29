@@ -25,7 +25,7 @@ model User {
   preferredLanguage   String?   @default("en")
   // Billing (Razorpay) — inert until PAYMENTS_ENABLED=true, see lib/payments/razorpay.ts.
   sparkBalance        Int         @default(0) // in-app currency balance; credited when a spark_pack order is verified paid
-  membershipTier      String      @default("free") // "free" | "plus" (paid). Old rows may still say "ultra"/"supreme"; the app treats them as "plus".
+  membershipTier      String      @default("free") // "free" | "plus" | "ultra" | "supreme"
   membershipRenewsAt  DateTime? // null for "free"; set to the next billing date when a membership order is verified paid
   createdAt           DateTime    @default(now())
   // Inactivity/data-retention lifecycle — see src/jobs/retentionCleanup.ts.
@@ -165,7 +165,7 @@ model PaymentOrder {
   userId            String
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind              String // "spark_pack" | "membership"
-  referenceId       String // spark pack id (e.g. "s1000") or membership plan id ("plus"; old orders may say "ultra"/"supreme")
+  referenceId       String // spark pack id (e.g. "s1000") or membership tier id (e.g. "plus")
   billingCycle      String? // "monthly" | "quarterly" | "yearly" — only set for kind="membership"
   amountInPaise     Int
   currency          String    @default("INR")
