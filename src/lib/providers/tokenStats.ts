@@ -7,7 +7,7 @@
  * cloudflareChat.ts) — importing index.ts back into openaiCompatible.ts
  * to reuse its stats map would create a circular import.
  *
- * This replaces guesswork ("a Hazelnut reply probably costs ~3.5-5K
+ * This replaces guesswork ("a Choco Hazelnut reply probably costs ~3.5-5K
  * tokens") with the actual numbers Groq/NVIDIA/SambaNova report back on
  * every request via the standard OpenAI-compatible `usage` field.
  */

@@ -25,7 +25,7 @@ model User {
   preferredLanguage   String?   @default("en")
   // Billing (Razorpay) — inert until PAYMENTS_ENABLED=true, see lib/payments/razorpay.ts.
   sparkBalance        Int         @default(0) // in-app currency balance; credited when a spark_pack order is verified paid
-  membershipTier      String      @default("free") // "free" | "plus" | "ultra" | "supreme"
+  membershipTier      String      @default("free") // "free" | "plus" (legacy "ultra"/"supreme" are treated as plus)
   membershipRenewsAt  DateTime? // null for "free"; set to the next billing date when a membership order is verified paid
   createdAt           DateTime    @default(now())
   // Inactivity/data-retention lifecycle — see src/jobs/retentionCleanup.ts.

@@ -3,6 +3,7 @@ import type { Prisma, PaymentOrder } from "@prisma/client";
 import { asyncHandler } from "../lib/asyncHandler";
 import { prisma } from "../lib/db";
 import { getCurrentUserId } from "../lib/auth";
+import { normalizeMembershipTier } from "../lib/providers/engines";
 import { checkRateLimit } from "../lib/rateLimit";
 import {
   PAYMENTS_ENABLED,
@@ -48,7 +49,7 @@ router.get("/me", asyncHandler(async (req, res) => {
   return res.json({
     paymentsLive: PAYMENTS_ENABLED && isRazorpayConfigured(),
     sparkBalance: user.sparkBalance,
-    membershipTier: user.membershipTier,
+    membershipTier: normalizeMembershipTier(user.membershipTier),
     membershipRenewsAt: user.membershipRenewsAt,
   });
 }));
@@ -116,7 +117,7 @@ router.post("/checkout/membership", asyncHandler(async (req, res) => {
 
   const tier = req.body?.tier as MembershipTierId | undefined;
   const cycle = req.body?.cycle as BillingCycle | undefined;
-  if (!tier || !["plus", "ultra", "supreme"].includes(tier)) {
+  if (tier !== "plus") {
     return res.status(400).json({ error: "Unknown membership tier." });
   }
   if (!cycle || !["monthly", "quarterly", "yearly"].includes(cycle)) {
@@ -267,16 +268,18 @@ async function applyPaidOrder(orderId: string, razorpayPaymentId: string) {
         data: { sparkBalance: { increment: pricing.sparks } },
       });
     } else if (lockedOrder.kind === "membership" && lockedOrder.billingCycle) {
+      // Orders created before the two-tier change may still say ultra/supreme;
+      // they were paid for, so they grant Plus (which now includes everything).
       if (!["plus", "ultra", "supreme"].includes(lockedOrder.referenceId) || !["monthly", "quarterly", "yearly"].includes(lockedOrder.billingCycle)) throw new Error("Invalid stored membership order.");
       const users = await tx.$queryRaw<{ membershipTier: string; membershipRenewsAt: Date | null }[]>`
         SELECT \`membershipTier\`, \`membershipRenewsAt\` FROM \`User\` WHERE id = ${lockedOrder.userId} FOR UPDATE
       `;
       const user = users[0];
-      const from = user?.membershipTier === lockedOrder.referenceId && user.membershipRenewsAt && user.membershipRenewsAt > new Date() ? user.membershipRenewsAt : new Date();
+      const from = normalizeMembershipTier(user?.membershipTier) === "plus" && user?.membershipRenewsAt && user.membershipRenewsAt > new Date() ? user.membershipRenewsAt : new Date();
       await tx.user.update({
         where: { id: lockedOrder.userId },
         data: {
-          membershipTier: lockedOrder.referenceId,
+          membershipTier: "plus",
           membershipRenewsAt: nextRenewalDate(lockedOrder.billingCycle as BillingCycle, from),
         },
       });

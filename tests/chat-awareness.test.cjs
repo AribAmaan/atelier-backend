@@ -81,7 +81,7 @@ test('chat route delivers awareness through engine switches, continuation, regen
     return captured;
   };
   try {
-    for (const [engineId, maxWords] of [['vanilla', 45], ['strawberry', 70], ['chocolate', 110], ['hazelnut', 130]]) {
+    for (const [engineId, maxWords] of [['strawberry', 70], ['choco_hazelnut', 130], ['vanilla', 70], ['chocolate', 130], ['hazelnut', 130]]) {
       await t.test(engineId, async () => {
         history = [make('user', 'Where is the map?'), make('assistant', 'Shall I check the archive?')];
         const result = await request({ engineId, message: 'Yes *I secretly hope it is there*' });
@@ -110,7 +110,7 @@ test('chat route delivers awareness through engine switches, continuation, regen
     await t.test('greeting update invalidates the cached persona', async () => {
       character.greeting = '*I open the observatory dome.*';
       history = [];
-      const result = await request({ engineId: 'vanilla', message: 'Hello' });
+      const result = await request({ engineId: 'strawberry', message: 'Hello' });
       assert.match(result.messages[0].content, /observatory dome/);
       assert.doesNotMatch(result.messages[0].content, /I unlock the archive/);
     });
@@ -146,7 +146,7 @@ test('chat route delivers awareness through engine switches, continuation, regen
       assert.equal(history[0].content, 'The hidden museum key is under the floor.');
       useRealCount = false;
     });
-    for (const [engineId, initialCount] of [['vanilla', 12], ['strawberry', 16], ['chocolate', 24]]) {
+    for (const [engineId, initialCount] of [['strawberry', 16], ['choco_hazelnut', 29]]) {
       await t.test(`${engineId} summary keeps an unanswered user turn in recent context`, async () => {
         useRealCount = true;
         character.memorySummary = '';

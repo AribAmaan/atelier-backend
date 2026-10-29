@@ -7,15 +7,7 @@
  * consistent while leaving a little room to finish a sentence naturally.
  */
 export function replyProfile(intelligence: number) {
-  if (intelligence <= 3) return {
-    name: "Vanilla",
-    purpose: "quick, direct dialogue",
-    ordinaryWords: 35,
-    minWords: 25,
-    maxWords: 45,
-    tokens: 128,
-    detailedTokens: 128,
-  };
+  // Manual (no engine selected) mode runs at intelligence 5.
   if (intelligence <= 5) return {
     name: "Balanced",
     purpose: "natural conversation",
@@ -25,6 +17,7 @@ export function replyProfile(intelligence: number) {
     tokens: 144,
     detailedTokens: 144,
   };
+  // Strawberry (free engine).
   if (intelligence <= 7) return {
     name: "Strawberry",
     purpose: "attentive conversation with a relevant reaction",
@@ -33,23 +26,14 @@ export function replyProfile(intelligence: number) {
     maxWords: 70,
     // 104 tokens was too close to the 70-word ceiling for punctuation-heavy
     // roleplay text and could end with finish_reason=length mid-sentence.
-    // 144 still keeps Strawberry materially cheaper than Chocolate while
-    // leaving enough room for a natural stop inside its 50–70 word envelope.
     tokens: 144,
     detailedTokens: 144,
   };
-  if (intelligence <= 8.5) return {
-    name: "Chocolate",
-    purpose: "grounded atmosphere and emotional follow-through",
-    ordinaryWords: 100,
-    minWords: 85,
-    maxWords: 110,
-    tokens: 224,
-    detailedTokens: 224,
-  };
+  // Choco Hazelnut (premium engine). Keeps Hazelnut's envelope, the larger of
+  // the two engines it combines, so Chocolate's depth is not narrowed.
   return {
-    name: "Hazelnut",
-    purpose: "precise character voice, subtext, continuity, and confident initiative",
+    name: "Choco Hazelnut",
+    purpose: "grounded scene presence, emotional follow-through, precise character voice, subtext, continuity, and confident initiative",
     ordinaryWords: 120,
     minWords: 105,
     maxWords: 130,
@@ -147,7 +131,7 @@ export function planReply(intelligence: number, _latestUserText: string, _sceneD
   return {
     mode: "tier" as const,
     maxTokens: p.tokens,
-    continuationMaxTokens: p.name === "Vanilla" ? 96 : p.name === "Strawberry" ? 128 : 160,
+    continuationMaxTokens: p.name === "Strawberry" ? 128 : 160,
     // Sentence-aware streaming uses the same boundaries as the final cap.
     preserveStreamedLength: false,
     targetWords: p.ordinaryWords,

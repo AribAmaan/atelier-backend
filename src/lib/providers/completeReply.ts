@@ -134,7 +134,7 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
 
   // A normal provider stop can still be far below the server-owned tier
   // minimum. Recover that once on the SAME provider so a greeting or tiny
-  // user message cannot collapse Chocolate/Hazelnut (or any other tier) into
+  // user message cannot collapse Choco Hazelnut (or any other tier) into
   // a one-liner. Unknown/content-filter/cancelled endings are never extended.
   const minimumWords = params?.minWords ?? 0;
   if (reason === "stop" && continuations < 2 && minimumWords > 0 && countWords(text) < minimumWords && text.trim() && !signal?.aborted) {

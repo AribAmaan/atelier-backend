@@ -108,11 +108,11 @@ for (const engine of Object.values(ROLEPLAY_ENGINES)) {
   });
 }
 
-test('Hazelnut standard-context mode also carries the narration rules', () => {
+test('Choco Hazelnut standard-context mode also carries the narration rules', () => {
   const previous = process.env.HAZELNUT_COMPACT_CONTEXT;
   try {
     process.env.HAZELNUT_COMPACT_CONTEXT = 'false';
-    const prompt = buildSystemPrompt(character, { explicitMode: false, engine: ROLEPLAY_ENGINES.hazelnut });
+    const prompt = buildSystemPrompt(character, { explicitMode: false, engine: ROLEPLAY_ENGINES.choco_hazelnut });
     assert.ok(prompt.includes(ROLEPLAY_INPUT_RULES));
     assert.ok(prompt.includes('ROLEPLAY_INPUT'));
   } finally {
@@ -121,10 +121,10 @@ test('Hazelnut standard-context mode also carries the narration rules', () => {
   }
 });
 
-test('engine response word limits remain unchanged', () => {
+test('both engines keep their existing response word limits (Strawberry 50-70, Choco Hazelnut 105-130)', () => {
   assert.deepEqual(Object.values(ROLEPLAY_ENGINES).map(e => {
     const p = replyProfile(e.intelligence); return [p.ordinaryWords, p.minWords, p.maxWords];
-  }), [[35, 25, 45], [60, 50, 70], [100, 85, 110], [120, 105, 130]]);
+  }), [[60, 50, 70], [120, 105, 130]]);
 });
 
 test('memory provider request preserves privacy labels and contains corrective memory rules', async () => {

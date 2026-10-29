@@ -30,7 +30,7 @@ import { withTokenAccounting } from "../lib/providers/tokenStats";
 import { planReply } from "../lib/providers/replyPolicy";
 import { buildRoleplayTurnGuard, formatRoleplayInput } from "../lib/roleplayInput";
 import type { GenParams, TtsVoice } from "../lib/providers";
-import { resolveEngineForTier, type MembershipTier } from "../lib/providers/engines";
+import { resolveEngineForTier, normalizeMembershipTier, PREMIUM_ENGINE_ID } from "../lib/providers/engines";
 import { computeRelationshipLevel } from "../lib/relationship";
 
 const router = Router();
@@ -228,7 +228,8 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   }
   activeGenerations.add(characterId);
   try {
-  const membershipTier = (requestingUser?.membershipTier as MembershipTier | undefined) ?? "free";
+  // Legacy "ultra"/"supreme" accounts count as Plus; anything else is Free.
+  const membershipTier = normalizeMembershipTier(requestingUser?.membershipTier);
 
   const body = req.body ?? {};
   const isRegenerate = body.regenerate === true;
@@ -252,7 +253,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   //
   // resolveEngineForTier is the actual paywall enforcement: a client can
   // send any engineId it wants (it's just JSON in a POST body), so
-  // getEngineConfig alone would happily hand a free user "hazelnut". This
+  // getEngineConfig alone would happily hand a free user "choco_hazelnut". This
   // checks body.engineId against requestingUser.membershipTier and, if the
   // user isn't entitled to it, transparently substitutes the best engine
   // their plan does cover rather than erroring the request out.
@@ -280,17 +281,16 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   const roleplayStyle = engine ? engine.roleplayStyle : explicitMode ? parseRoleplayStyle(body.roleplayStyle) : undefined;
   const voiceNotes = engine?.voiceNotes;
   const intelligence = engine?.intelligence ?? 5;
-  const compactHazelnut = engine?.id === "hazelnut" && hazelnutContextEnabled();
-  // Provider priority is fixed for every engine, including Chocolate and
-  // Hazelnut: NVIDIA -> Groq -> SambaNova -> Cloudflare -> Ollama. Engine
+  const compactHazelnut = engine?.id === PREMIUM_ENGINE_ID && hazelnutContextEnabled();
+  // Provider priority is fixed for every engine, including Choco Hazelnut: NVIDIA -> Groq -> SambaNova -> Cloudflare -> Ollama. Engine
   // quality remains controlled by prompt/context/sampling settings, not by
   // silently reordering providers.
   const maxTokens = maxTokensForIntelligence(intelligence);
   const genParams: GenParams = engine
     ? { temperature: engine.temperature, topP: engine.topP, maxTokens }
     : { maxTokens };
-  const recentWindow = engine?.id === "hazelnut" && !compactHazelnut ? 20 : engine?.recentMessageWindow ?? RECENT_MESSAGE_WINDOW;
-  const summarizeTrigger = engine?.id === "hazelnut" && !compactHazelnut ? 36 : engine?.summarizeTrigger ?? SUMMARIZE_TRIGGER;
+  const recentWindow = engine?.id === PREMIUM_ENGINE_ID && !compactHazelnut ? 20 : engine?.recentMessageWindow ?? RECENT_MESSAGE_WINDOW;
+  const summarizeTrigger = engine?.id === PREMIUM_ENGINE_ID && !compactHazelnut ? 36 : engine?.summarizeTrigger ?? SUMMARIZE_TRIGGER;
   const sceneDirective =
     typeof body.sceneDirective === "string" ? body.sceneDirective.trim().slice(0, 500) : undefined;
 
@@ -436,7 +436,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       ? `h${Math.round(minutesSinceLastMessage / 60)}`
       : `d${Math.round(minutesSinceLastMessage / (60 * 24))}`;
   const promptCacheKey = createHash("sha256").update(JSON.stringify([
-    compactHazelnut ? "compact-v6-awareness" : "standard-v5-awareness", characterId, character.name,
+    compactHazelnut ? "compact-v7-two-engines" : "standard-v6-two-engines", characterId, character.name,
     character.personality, character.backstory, character.roleplayNotes, character.tagline, character.greeting,
     character.memorySummary ?? "", character.examples ?? "", engine?.id ?? "none", explicitMode,
     spiceLevel, roleplayStyle, sceneDirective, voiceNotes, timeGapBucket,
@@ -952,7 +952,7 @@ async function maybeSummarize(
   // context. This applies to every engine, not only compact Hazelnut.
   if (toFold[toFold.length - 1]?.role === "user") toFold.pop();
   if (toFold.length === 0) return;
-  const updatedSummary = await withTokenAccounting(intelligence >= 10 ? "hazelnut" : "other", "memory", () => summarizeConversation(
+  const updatedSummary = await withTokenAccounting(intelligence >= 10 ? PREMIUM_ENGINE_ID : "other", "memory", () => summarizeConversation(
     character,
     character.memorySummary,
     toFold,
