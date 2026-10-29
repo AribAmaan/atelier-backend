@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { splitRoleplayInput, formatRoleplayInput, buildRoleplayTurnGuard, ROLEPLAY_INPUT_RULES,
+const { splitRoleplayInput, formatRoleplayInput, buildRoleplayTurnGuard, ROLEPLAY_INPUT_RULES, buildCastHandoffGuard,
   ROLEPLAY_MEMORY_RULES } = require('../dist/lib/roleplayInput');
 const { selectHazelnutContext } = require('../dist/lib/hazelnutContext');
 const { buildSystemPrompt, summarizeConversation } = require('../dist/lib/providers');
@@ -158,6 +158,26 @@ test('reply guidance is context-based: no word counts, no quota, no padding', ()
   }
   assert.match(buildReplyGuidance(4, 'light'), /light/);
   assert.match(buildReplyGuidance(10, 'heavy'), /long or sets a scene/);
+});
+
+test('short replies still keep roleplay texture: action plus personality, never bare plain words', () => {
+  for (const e of Object.values(ROLEPLAY_ENGINES)) {
+    for (const weight of ['light', 'normal', 'heavy']) {
+      const text = buildReplyGuidance(e.intelligence, weight);
+      assert.match(text, /roleplay partner, not a chatbot/);
+      assert.match(text, /\*action, expression, body language or sensory detail\*/);
+      assert.match(text, /never send bare plain words/);
+    }
+    assert.match(e.voiceNotes, /\*action or expression\*/);
+  }
+  assert.match(buildReplyGuidance(4, 'light'), /small \*action or expression\* plus a line or two of dialogue/);
+});
+
+test('a mentioned person is part of the story, never "I do not know anyone by that name"', () => {
+  const guard = buildCastHandoffGuard('wheres amy mom', [], [{ name: 'Amy', personality: 'bright', backstory: '' }]);
+  assert.match(guard, /do not say you have never heard of them/);
+  assert.match(ROLEPLAY_INPUT_RULES, /STORY PREMISE/);
+  assert.match(ROLEPLAY_INPUT_RULES, /Never flatly say you do not know a person the user mentions/);
 });
 
 test('engine voice notes and prompts no longer force depth or length on small turns', () => {

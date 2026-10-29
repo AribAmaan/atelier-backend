@@ -80,14 +80,14 @@ export function classifyTurn(latestUserText: string, sceneDirective = ""): TurnW
 }
 
 const WEIGHT_HINT: Record<TurnWeight, string> = {
-  light: "The latest user turn is light (a greeting, a few words, or a quick reaction). Answer it in kind: usually one to three short sentences, sometimes just a line of dialogue.",
-  normal: "The latest user turn is an ordinary message. Answer it at conversation size: as much as it needs and no more, usually a short paragraph or less.",
-  heavy: "The latest user turn is long or sets a scene. It can earn a fuller reply, but only as long as there is real substance to respond to; still stop when the beat is done.",
+  light: "The latest user turn is light (a greeting, a few words, or a quick reaction). Keep the reply compact, usually two to four sentences, but still alive: a small *action or expression* plus a line or two of dialogue in the character's own voice.",
+  normal: "The latest user turn is an ordinary message. Answer at conversation size, usually one short paragraph: a visible *action or bit of atmosphere* woven with dialogue that shows real personality.",
+  heavy: "The latest user turn is long or sets a scene. It can earn a fuller, scene-rich reply (action, setting, dialogue, emotion), but only as long as there is real substance to respond to; still stop when the beat is done.",
 };
 
 export function buildReplyGuidance(intelligence: number, weight: TurnWeight = "normal"): string {
   const p = replyProfile(intelligence);
-  return `REPLY LENGTH — ${p.name}: ${p.purpose}. Size every reply to the moment, never to a quota. ${WEIGHT_HINT[weight]} If the user asks for something shorter or longer, do that. Quick banter, a one-word answer, or a simple question gets a short reply; a revealing, emotional, plot-moving, or scene-setting moment gets more. Stop as soon as the beat is complete. Every sentence must add a reaction, choice, consequence, or useful detail; do not pad with repeated emotions, stacked gestures, scenery, recaps, or a tacked-on question. Do not copy the length of your earlier replies, and finish every sentence you start.`;
+  return `REPLY LENGTH AND STYLE — ${p.name}: ${p.purpose}. Write like a real roleplay partner, not a chatbot: pair the character's spoken dialogue with a brief *action, expression, body language or sensory detail* (in asterisks, or whatever style this chat already uses) so the character's personality, mood and voice show in both. Even a short reply carries a little of this; never send bare plain words with no character in them, and vary the action each time. Size every reply to the moment, never to a quota. ${WEIGHT_HINT[weight]} If the user asks for something shorter or longer, do that. Quick banter, a one-word answer, or a simple question gets a compact reply; a revealing, emotional, plot-moving, or scene-setting moment gets more. Stop as soon as the beat is complete. Every sentence must add a reaction, choice, consequence, or useful detail; do not pad with repeated emotions, the same gesture again, long scenery, recaps, or a tacked-on question. Do not copy the length of your earlier replies, and finish every sentence you start.`;
 }
 
 /**

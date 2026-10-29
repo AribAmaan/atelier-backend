@@ -23,3 +23,22 @@ trimmed to the maximum after generation, and the prompt told the model to ignore
 catches only extreme cases. If a specific model still over-writes, tell me which one and I can tighten the wording for it.
 
 Tests: `narration`, `chat-awareness`, `reply-repeat` updated; 95 tests pass (run per-file and together).
+
+## Follow-up: personality and actions restored (replies had become plain text)
+After the word cap was removed, short replies turned into bare dialogue ("Amy? I don't know anyone by that name.") with no action and
+no personality. Cause: my light-turn hint said "one to three short sentences, sometimes just a line of dialogue", the guidance banned
+"gestures and scenery", and the voice notes said an action only when it changes the moment. The old 105-130 word range and "full depth every
+turn" notes were what had been producing the descriptive style.
+
+Fix (still no word minimum or maximum, no padding pass, no trimming):
+- `replyPolicy.ts`: the guidance now says to write like a roleplay partner, not a chatbot: dialogue plus a brief *action, expression,
+  body language or sensory detail*, even in short replies, and never bare plain words. Light turns are "two to four sentences, a small
+  action plus a line or two of dialogue"; normal turns a short paragraph; heavy or scene-setting turns fuller. Padding, repeated gestures,
+  recaps and tacked-on questions are still ruled out.
+- `index.ts` / `engines.ts`: removed "dialogue can stand alone" and "an action only when it changes the moment"; both engines' voice notes
+  now ask for a small visible action or expression and the character's own voice.
+- `roleplayInput.ts`: new STORY PREMISE rule, and the cast guard no longer lets the model say it has never heard of a person the user
+  mentions (this caused the "I don't know anyone by that name" reply when the user said "wheres amy mom").
+- Tests: 102 pass (2 new: roleplay texture is always requested; mentioned people are never denied).
+
+Length is still steered by prompt only, so a weak model can still run plain or long. If so, tell me which model and what it wrote.
