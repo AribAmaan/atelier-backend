@@ -20,6 +20,7 @@ import { getEngineConfig, type RoleplayEngineConfig } from "./engines";
 import crypto from "crypto";
 import { buildReplyGuidance, replyProfile, clampReplyToWordCeiling } from "./replyPolicy";
 import { streamCompleteReply } from "./completeReply";
+import { dropRepeatedSentences } from "./replyRepeat";
 import { hazelnutContextEnabled } from "../hazelnutContext";
 import { formatRoleplayInput, ROLEPLAY_INPUT_RULES, ROLEPLAY_MEMORY_RULES } from "../roleplayInput";
 
@@ -185,10 +186,17 @@ export function parseRoleplayStyle(raw: unknown): RoleplayStyle {
 
 const SAFETY_FOOTER = "";
 
-export function cleanAssistantResponse(text: string, intelligence = 5): string {
+/**
+ * `recentAssistant` are the character's own earlier replies. Sentences that
+ * repeat inside this reply, or that repeat a line from those replies, are
+ * removed so loops ("Main tumhe kabhi jaane nahi dungi..." every turn) never
+ * reach the user or the saved history that would reinforce the loop.
+ */
+export function cleanAssistantResponse(text: string, intelligence = 5, recentAssistant: string[] = []): string {
   if (!text) return text;
   let cleaned = text.replace(/\r\n/g, "\n").trim();
   cleaned = stripLeakedMeta(cleaned);
+  cleaned = dropRepeatedSentences(cleaned, recentAssistant);
 
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 

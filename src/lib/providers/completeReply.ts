@@ -1,5 +1,6 @@
 import type { GenParams } from "./index";
 import { clampReplyToWordCeiling, replySentenceEnds } from "./replyPolicy";
+import { dropRepeatedSentences } from "./replyRepeat";
 
 type Message = { role: "system" | "user" | "assistant"; content: string };
 type Stream = (messages: Message[], onToken: (text: string) => void, signal?: AbortSignal, params?: GenParams) => Promise<string>;
@@ -14,7 +15,23 @@ function countWords(text: string): number {
  * same-provider continuation, not a regeneration: it preserves the reply
  * already streamed and asks only for the missing depth.
  */
-function depthContinuationSuffix(previous: string, next: string): string {
+export function depthContinuationSuffix(previous: string, next: string): string {
+  return withoutRepeats(previous, rawDepthContinuationSuffix(previous, next));
+}
+
+/**
+ * Models often ignore "do not restart" and re-send the opening of the reply
+ * (sometimes with a new tail). Anything the reply already says is discarded so
+ * the top-up can only add NEW sentences; if nothing new is left, no suffix.
+ */
+function withoutRepeats(previous: string, suffix: string): string {
+  if (!suffix.trim()) return "";
+  const novel = dropRepeatedSentences(suffix, [previous], { trim: false, allowEmpty: true });
+  if (!novel.trim()) return "";
+  return /^\s/.test(novel) || /\s$/.test(previous) || /^[,.;:!?]/.test(novel) ? novel : ` ${novel}`;
+}
+
+function rawDepthContinuationSuffix(previous: string, next: string): string {
   next = next.trimStart();
   if (!next) return "";
   if (next.startsWith(previous)) return next.slice(previous.length);
@@ -94,7 +111,7 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
           : Math.min(1024, Math.max(512, params?.maxTokens ?? 512)), onFinish: capture,
       });
       if (signal?.aborted) break;
-      const suffix = continuationSuffix(text, next, anchor);
+      const suffix = withoutRepeats(text, continuationSuffix(text, next, anchor));
       if (!suffix) {
         if (reason === "stop" || reason === "length") reason = "length";
         break;
@@ -124,30 +141,38 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
     const targetWords = Math.max(minimumWords, params?.targetWords ?? minimumWords);
     const currentWords = countWords(text);
     const missingWords = Math.max(1, targetWords - currentWords);
-    const recovery: Message[] = [
-      ...messages,
-      { role: "assistant", content: text },
-      { role: "system", content: `The assistant reply above stopped too early for this engine's fixed tier envelope. Continue that SAME assistant turn only, adding roughly ${missingWords} words of natural character-specific dialogue, action, atmosphere, or subtext until the COMPLETE reply is near ${targetWords} words. Start directly with new continuation text; do not restart, summarize, repeat the existing opening, take the user's turn, or begin a new scene. Finish naturally.` },
-    ];
-    let extensionReason = "unknown";
-    continuations++;
-    try {
-      const next = await stream(recovery, () => {}, signal, {
-        ...params,
-        // Scale the top-up budget to the amount actually missing. The old
-        // fixed 320-token allowance could turn a 30-word top-up into another
-        // full paragraph and push a 120-word tier close to 200 words.
-        maxTokens: Math.min(
-          params?.continuationMaxTokens ?? 160,
-          Math.max(64, Math.ceil(missingWords * 1.8 + 24))
-        ),
-        onFinish: value => { extensionReason = value; },
-      });
-      if (!signal?.aborted) {
+    const topUpPrompt = (retry: boolean) => retry
+      ? `Your previous continuation only repeated sentences that are already in the reply above. Write ONLY brand-new sentences that move the moment forward (a new line of dialogue, a new action, or a fresh reaction), roughly ${missingWords} words. Do not reuse any wording from the reply above, do not restart it, and do not take the user's turn. Start directly with the new text.`
+      : `The assistant reply above stopped too early for this engine's fixed tier envelope. Continue that SAME assistant turn only, adding roughly ${missingWords} words of natural character-specific dialogue, action, atmosphere, or subtext until the COMPLETE reply is near ${targetWords} words. Start directly with new continuation text; do not restart, summarize, repeat the existing opening, take the user's turn, or begin a new scene. Finish naturally.`;
+    // At most two attempts: if the model restarts the reply and the repeat
+    // guard leaves nothing new, ask once more for new sentences only, rather
+    // than leaving the reply below its tier minimum.
+    for (let attempt = 0; attempt < 2 && !signal?.aborted; attempt++) {
+      const recovery: Message[] = [
+        ...messages,
+        { role: "assistant", content: text },
+        { role: "system", content: topUpPrompt(attempt > 0) },
+      ];
+      let extensionReason = "unknown";
+      continuations++;
+      let accepted = "";
+      try {
+        const next = await stream(recovery, () => {}, signal, {
+          ...params,
+          // Scale the top-up budget to the amount actually missing. The old
+          // fixed 320-token allowance could turn a 30-word top-up into another
+          // full paragraph and push a 120-word tier close to 200 words.
+          maxTokens: Math.min(
+            params?.continuationMaxTokens ?? 160,
+            Math.max(64, Math.ceil(missingWords * 1.8 + 24))
+          ),
+          onFinish: value => { extensionReason = value; },
+        });
+        if (signal?.aborted) break;
         const suffix = depthContinuationSuffix(text, next);
         if (suffix) {
           const combined = maxWords > 0 ? clampReplyToWordCeiling(text + suffix, maxWords, minimumWords) : text + suffix;
-          const accepted = combined.startsWith(text) ? combined.slice(text.length) : "";
+          accepted = combined.startsWith(text) ? combined.slice(text.length) : "";
           if (accepted) {
             text = combined;
             onToken(accepted);
@@ -157,10 +182,12 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
             if (reason === "length" && maxWords > 0 && countWords(text) >= maxWords) reason = "stop";
           }
         }
+      } catch {
+        // A tier-depth top-up is best-effort. Keep the valid first completion
+        // instead of turning an otherwise successful reply into a provider fail.
+        break;
       }
-    } catch {
-      // A tier-depth top-up is best-effort. Keep the valid first completion
-      // instead of turning an otherwise successful reply into a provider fail.
+      if (accepted) break;
     }
   }
 

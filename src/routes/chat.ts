@@ -605,7 +605,11 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
     ));
 
     if (fullText.trim().length > 0) {
-      const finalText = cleanAssistantResponse(fullText.trim(), intelligence);
+      const recentAssistantReplies = recentHistory
+        .filter((m: { role: string; content: string }) => m.role === "assistant")
+        .slice(-6)
+        .map((m: { content: string }) => m.content);
+      const finalText = cleanAssistantResponse(fullText.trim(), intelligence, recentAssistantReplies);
       // NOTE: the save must complete BEFORE we count messages for the
       // relationship level — they are not independent, so this cannot be
       // parallelized with Promise.all without racing the count against the
