@@ -88,7 +88,12 @@ test('chat route delivers awareness through engine switches, continuation, regen
         assert.ok(result.messages[0].content.includes(CONVERSATION_AWARENESS_RULES));
         assert.match(result.messages[0].content, /CURRENT RESPONSE FOCUS/);
         assert.match(result.messages.at(-1).content, /unspoken_context/);
-        assert.match(result.messages.at(-2).content, /Shall I check the archive/);
+        // The recency anchor sits just before the final user turn; the
+        // conversation itself (ignoring system notes) is still in order.
+        const convo = result.messages.slice(1).filter(m => m.role !== 'system');
+        assert.equal(convo.at(-1).role, 'user');
+        assert.match(convo.at(-2).content, /Shall I check the archive/);
+        assert.match(result.messages.at(-2).content, /^CHARACTER REMINDER/);
         assert.equal(result.params.maxWords, maxWords);
         assert.equal(history.at(-2).content, 'Yes *I secretly hope it is there*');
       });

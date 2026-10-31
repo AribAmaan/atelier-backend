@@ -49,7 +49,26 @@ test('spoken hypotheticals retain their qualifier and source attribution', () =>
   const content = 'This is only a hypothetical. The museum key is in my bag.';
   const result = selectHazelnutContext({ history: recent, query: 'museum key', systemTokens: 100,
     targetTokens: 2200, recalled: [msg('old', 'user', content)] });
-  assert.deepEqual(excerpts(result), [{ sourceId: 'old', speaker: 'user', kind: 'spoken', quote: content }]);
+  // The model sees a short per-request label, never the database id.
+  assert.deepEqual(excerpts(result), [{ sourceId: 'm1', speaker: 'user', kind: 'spoken', quote: content }]);
+  assert.doesNotMatch(result.memory, /"old"/);
+});
+
+test('excerpt labels keep pieces of one message together and distinguish different messages', () => {
+  const uuidA = '3f2b8c1e-9d4a-4e6b-8a1c-0b7d5e2f9a11', uuidB = '7c1d2e3f-0a9b-4c8d-b6e5-1f2a3b4c5d6e';
+  const result = selectHazelnutContext({ history: recent, query: 'museum key', systemTokens: 100, targetTokens: 4000,
+    recalled: [
+      msg(uuidA, 'user', 'The museum key is in my bag. *I tap the museum key pocket nervously*'),
+      msg(uuidB, 'user', 'Remember the museum key stays with me.'),
+    ] });
+  const list = excerpts(result);
+  assert.ok(list.length >= 3, 'two segments from message A plus message B');
+  const byLabel = new Map();
+  for (const e of list) byLabel.set(e.sourceId, (byLabel.get(e.sourceId) ?? 0) + 1);
+  assert.equal(byLabel.size, 2, 'two source messages -> two labels');
+  assert.ok([...byLabel.values()].includes(2), 'both segments of message A share one label');
+  assert.ok(list.every(e => /^m\d+$/.test(e.sourceId)));
+  assert.doesNotMatch(result.memory, new RegExp(`${uuidA}|${uuidB}`), 'raw ids never reach the model');
 });
 
 test('a large persona cannot consume the entire allowance for a relevant boundary', () => {
@@ -133,6 +152,35 @@ test('every tier sends causal, attributed memory rules to the summary provider',
       assert.match(request.messages[1].content, /unspoken_context/);
       assert.match(request.messages[1].content, /Why did you hide it/);
     }
+  } finally {
+    global.fetch = originalFetch;
+    if (previousKey === undefined) delete process.env.NVIDIA_API_KEY;
+    else process.env.NVIDIA_API_KEY = previousKey;
+  }
+});
+
+test('every tier asks the summary for scene state; mid and top tiers also for voice (non-verbal continuity and personality)', async () => {
+  const previousKey = process.env.NVIDIA_API_KEY;
+  const originalFetch = global.fetch;
+  const captured = [];
+  try {
+    process.env.NVIDIA_API_KEY = 'test-placeholder-no-live-call';
+    global.fetch = async (_url, init) => {
+      captured.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'Scene: the map is on the table.' }, finish_reason: 'stop' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const tiers = Object.values(ROLEPLAY_ENGINES);
+    for (const engine of tiers) {
+      await summarizeConversation(character, '', [msg('u', 'user', 'Hello there')], false, engine.intelligence);
+    }
+    tiers.forEach((engine, i) => {
+      const prompt = captured[i].messages[0].content;
+      assert.match(prompt, /Scene/, `${engine.id}: scene state requested`);
+      assert.match(prompt, /holding, or wearing|holds or wears/, `${engine.id}: who holds or wears what`);
+      if (engine.intelligence >= 6) assert.match(prompt, /Voice/, `${engine.id}: voice requested`);
+      else assert.doesNotMatch(prompt, /Voice:/, `${engine.id}: lowest tier stays short`);
+      assert.ok(prompt.includes(CONTINUITY_MEMORY_RULES), 'attribution and privacy rules still attached');
+    });
   } finally {
     global.fetch = originalFetch;
     if (previousKey === undefined) delete process.env.NVIDIA_API_KEY;
