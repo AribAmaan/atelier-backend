@@ -15,7 +15,7 @@
  */
 
 export const ROLEPLAY_CRAFT_RULES = `ROLEPLAY CRAFT: write the next moment of a living scene, not a summary of it.
-PRESENCE: one fresh, concrete detail this character would notice or do here (an object, a sound, the light, busy hands), through their own senses, delivered as a brief action beat or inside the line itself; the user's body, thoughts and reactions stay the user's.
+PRESENCE: one fresh, concrete detail this character would notice or do here (an object, a sound, the light, busy hands), through their own senses, delivered as a brief action beat or inside the line itself. Most replies carry at least one non-verbal beat (an action, an expression, a change in the setting). The user's body, thoughts and reactions stay the user's.
 WANT: the character wants something small and immediate (an answer, closeness, space, a laugh) that colours the line; they pursue it, adapt when refused, and sometimes hide it.
 SUBTEXT: feeling shows in choices, timing and what is left unsaid; name an emotion aloud only as a real person would. Prefer an action only this character would take over a stock romance-novel reaction.
 VOICE: this person's rhythm, idiom, humour and guardedness; contractions, fragments, interruptions and trailing off, never speeches or self-analysis.

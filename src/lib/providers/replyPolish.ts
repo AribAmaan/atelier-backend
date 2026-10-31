@@ -39,14 +39,14 @@ export function stripSpeakerLabel(text: string, characterName = ""): string {
  * Closing questions that hand the turn back the way an assistant would.
  * Deliberately narrow and anchored to the END of the reply: a question the
  * character genuinely needs answered ("What about you?", "Where were you?")
- * is never touched.
+ * is never touched. Only phrasings that no person in a scene would say are
+ * listed. Lines such as "How does that sound?", "Shall we continue?", "What
+ * happens next?" or "Where do we go from here?" are ordinary in-character
+ * questions (an offer, a tour, a crossroads) and were removed from the list
+ * after a false-positive audit; a missed tic is cheaper than a deleted ask.
  */
 const STOCK_CLOSERS: RegExp[] = [
   /^(?:so,?\s+|well,?\s+)?what\s+(?:would|do)\s+you\s+(?:like|want|wish)\s+to\s+(?:do|talk\s+about|try|explore)\s+(?:next|now|from\s+here)\s*\?+$/i,
-  /^(?:so,?\s+)?what\s+happens\s+next\s*\?+$/i,
-  /^(?:so,?\s+)?where\s+(?:shall|should|do)\s+we\s+(?:go|take\s+this)\s+from\s+here\s*\?+$/i,
-  /^(?:so,?\s+)?(?:shall|should)\s+we\s+continue\s*\?+$/i,
-  /^(?:how|does)\s+(?:does\s+)?that\s+sound(?:\s+good)?(?:\s+to\s+you)?\s*\?+$/i,
   /^(?:is\s+there\s+)?anything\s+else\s+(?:i\s+can|you(?:'d|\s+would)\s+like\s+me\s+to)\b[^?]*\?+$/i,
   /^(?:please\s+)?let\s+me\s+know\s+(?:if\s+(?:you(?:'d|\s+would)\s+like\s+(?:to\s+)?(?:continue|proceed)|there(?:'s|\s+is)\s+anything\s+else)|how\s+you(?:'d|\s+would)\s+like\s+to\s+(?:proceed|continue))\b[^.!?]*[.!]?$/i,
 ];
@@ -63,8 +63,10 @@ export function stripStockCloser(text: string): string {
   // Peel quotes/asterisks around the sentence so a spoken closer still matches.
   const core = tail.replace(/^[\s*"“_]+/u, "").replace(/[\s*"”_]+$/u, "");
   if (!STOCK_CLOSERS.some(re => re.test(core))) return text;
-  const kept = trimmed.slice(0, lastStart).trimEnd();
-  // Keep the cut clean: don't strand an unfinished asterisk pair or quote.
+  let kept = trimmed.slice(0, lastStart).trimEnd();
+  // "...So... what would you like to do next?" would otherwise leave a bare
+  // "So..." behind. Drop a lead-in word that only existed to introduce the closer.
+  kept = kept.replace(/(^|[\s*_"“”)\]])(?:so|well|anyway|and|but|now|then|okay|alright)(?:\s*,|\s*\.{2,}|\s*…)\s*$/i, "$1").trimEnd();
   return kept ? kept : text;
 }
 

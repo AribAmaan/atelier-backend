@@ -118,6 +118,48 @@ async function readErrorBody(res: Response): Promise<string> {
 }
 
 /**
+ * Some chat templates (strict Qwen/Mistral-style ones) reject a system message
+ * that is not first. The persona anchor and the truncation top-up both send one
+ * mid-conversation, so an endpoint like that would fail every request and the
+ * fallback chain would quietly skip it. Folding the late system messages into
+ * the first one keeps the same instructions in a layout every template accepts.
+ */
+export function foldLateSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const late = messages.filter((m, i) => i > 0 && m.role === "system");
+  if (!late.length) return messages;
+  const kept = messages.filter((m, i) => i === 0 || m.role !== "system");
+  const extra = late.map(m => m.content).join("\n\n");
+  if (kept[0]?.role === "system") {
+    kept[0] = { ...kept[0], content: `${kept[0].content}\n\n${extra}` };
+    return kept;
+  }
+  return [{ role: "system", content: extra }, ...kept];
+}
+
+// Endpoint+model pairs that rejected a late system message and accepted the
+// folded layout. Remembered so later requests skip the wasted round trip.
+const foldsLateSystem = new Set<string>();
+
+async function postFoldingLateSystem(
+  key: string,
+  messages: ChatMessage[],
+  post: (messages: ChatMessage[]) => Promise<Response>
+): Promise<Response> {
+  if (!messages.some((m, i) => i > 0 && m.role === "system")) return post(messages);
+  if (foldsLateSystem.has(key)) return post(foldLateSystemMessages(messages));
+  const res = await post(messages);
+  if (res.status !== 400) return res;
+  const detail = await readErrorBody(res.clone());
+  if (!/system/i.test(detail)) return res;
+  const retry = await post(foldLateSystemMessages(messages));
+  if (retry.ok) {
+    foldsLateSystem.add(key);
+    console.warn(`[providers] ${key} rejected a mid-conversation system message; folding it into the first system message for this endpoint.`);
+  }
+  return retry;
+}
+
+/**
  * Thrown when a provider returns HTTP 200 with no usable content instead of
  * erroring outright. The most common cause here: a reasoning model (e.g.
  * Qwen on Groq) burns its entire max_tokens budget on hidden <think>...
@@ -180,7 +222,7 @@ export async function streamOpenAICompatibleChat(
     let res: Response;
     try {
       recordProviderAttempt();
-      res = await fetch(`${baseUrl}/chat/completions`, {
+      res = await postFoldingLateSystem(`${baseUrl}|${model}`, messages, outgoing => fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -188,14 +230,14 @@ export async function streamOpenAICompatibleChat(
         },
         body: JSON.stringify({
           model,
-          messages,
+          messages: outgoing,
           stream: true,
           stream_options: { include_usage: true },
           max_tokens: maxTokens,
           ...extraBody,
         }),
         signal: controller.signal,
-      });
+      }));
     } catch (err) {
       if (clientAborted) return "";
       if (err instanceof Error && err.name === "AbortError") {
@@ -339,15 +381,15 @@ export async function completeOpenAICompatibleChat(
     let res: Response;
     try {
       recordProviderAttempt();
-      res = await fetch(`${baseUrl}/chat/completions`, {
+      res = await postFoldingLateSystem(`${baseUrl}|${model}`, messages, outgoing => fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ model, messages, stream: false, max_tokens: maxTokens, ...extraBody }),
+        body: JSON.stringify({ model, messages: outgoing, stream: false, max_tokens: maxTokens, ...extraBody }),
         signal: controller.signal,
-      });
+      }));
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(`Request to ${baseUrl} timed out after ${timeoutMs}ms.`);

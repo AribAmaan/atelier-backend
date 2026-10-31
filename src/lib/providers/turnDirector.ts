@@ -62,7 +62,7 @@ export function classifyUserBeat(latestUserText: string): UserBeat {
   return "normal";
 }
 
-type Shape = {
+export type Shape = {
   opening: "action" | "speech";
   openingWord: string;
   ending: "question" | "action" | "statement";
@@ -70,7 +70,7 @@ type Shape = {
   words: number;
 };
 
-function analyzeReply(text: string): Shape {
+export function analyzeReply(text: string): Shape {
   const t = text.trim();
   const opening: Shape["opening"] = /^\*/.test(t) ? "action" : "speech";
   const openingWord = (t.replace(/^[\s*"“'‘_(\[]+/u, "").match(/^[\p{L}\p{N}]+/u)?.[0] ?? "").toLowerCase();
@@ -99,19 +99,19 @@ const STOCK: { label: string; re: RegExp }[] = [
 ];
 
 // Function words that must not make an n-gram look like a "stock line".
-const FUNCTION_WORDS = new Set((
+export const FUNCTION_WORDS = new Set((
   "the a an and or but to of in on at for with from by as is are was were be been it its this that these those i me my you your he she his her they them their we us our " +
   "do does did have has had not no yes so if then than what when where how just very " +
   // common romanized Hindi / Urdu function words
   "main mein tum tumhe tumhara aap hai hain ho tha thi the nahi nahin toh to kya ki ke ka ko se me aur par bhi ab yeh ye woh wo"
 ).split(/\s+/));
 
-function normTokens(text: string): string[] {
+export function normTokens(text: string): string[] {
   // Drop narration markers so "*smiles*" and "smiles" are the same word.
   return text.toLowerCase().replace(/[^\p{L}\p{N}\p{M}\s'’]/gu, " ").split(/\s+/).filter(Boolean);
 }
 
-function trigrams(tokens: string[], skip: Set<string>): Set<string> {
+export function trigrams(tokens: string[], skip: Set<string>): Set<string> {
   const out = new Set<string>();
   for (let i = 0; i + 2 < tokens.length; i++) {
     const g = tokens.slice(i, i + 3);
@@ -131,6 +131,11 @@ function repeatedPhrases(recent: string[], skip: Set<string>): string[] {
     for (const g of trigrams(normTokens(reply), skip)) counts.set(g, (counts.get(g) ?? 0) + 1);
   }
   return [...counts.entries()].filter(([, n]) => n >= PHRASE_MIN_REPLIES).sort((a, b) => b[1] - a[1]).map(([g]) => g).slice(0, 2);
+}
+
+/** Labels of the stock reactions present in one reply (form match only). */
+export function stockLabels(text: string): string[] {
+  return STOCK.filter(({ re }) => re.test(text)).map(s => s.label);
 }
 
 function stockTics(recent: string[]): string[] {
@@ -164,57 +169,85 @@ export type TurnDirectorInput = {
   characterName?: string;
   /** When set, the reply is driven by a scene steer rather than a user turn. */
   sceneDirective?: string;
+  /**
+   * Treatment arm: tell the model a light, brief user turn can get a compact
+   * reply. Off by default. The only real-user retention evidence found longer
+   * replies retain better, so shortening is a hypothesis to test.
+   */
+  adaptiveRhythm?: boolean;
+  /**
+   * Treatment arm: cap action beats after three action-heavy replies. Off by
+   * default for the same reason: non-verbal description correlated with
+   * retention, so limiting it is a hypothesis to test.
+   */
+  actionCap?: boolean;
 };
+
+export type Steer = { id: string; text: string };
+
+/**
+ * The steers for this turn, each with a stable id so they can be counted in
+ * telemetry. Returns [] on a healthy conversation.
+ */
+export function planTurnSteers(input: TurnDirectorInput): Steer[] {
+  const turns = input.history.filter(m => m.role === "user" || m.role === "assistant");
+  const last = turns[turns.length - 1];
+  const assistant = turns.filter(m => m.role === "assistant").map(m => m.content).filter(c => c.trim());
+  const steer: Steer[] = [];
+  const add = (id: string, text: string) => steer.push({ id, text });
+
+  const shapes = assistant.slice(-SHAPE_WINDOW).map(analyzeReply);
+  if (shapes.length >= QUESTION_RUN) {
+    if (shapes.slice(-QUESTION_RUN).every(s => s.ending === "question")) {
+      add("question_run", "Close on an action, a line that lands, or a change in the scene. The last two replies both ended on a question.");
+    }
+  }
+  if (shapes.length === SHAPE_WINDOW) {
+    // Only runs of the same habit are steered. A run of speech openings is
+    // never pushed toward actions by itself.
+    if (shapes.every(s => s.opening === "action")) {
+      add("open_action_run", "Open with the character's spoken words; the last three replies all opened with an action.");
+    }
+    if (shapes[0].openingWord && shapes.every(s => s.openingWord === shapes[0].openingWord)) {
+      add("first_word", `Start with a different first word than ${JSON.stringify(shapes[0].openingWord)}.`);
+    }
+    if (input.actionCap && shapes.every(s => s.actions >= 2)) {
+      add("action_cap", "Use at most one action beat and let speech carry the turn; the last three replies were action-heavy.");
+    } else if (shapes.every(s => s.actions === 0)) {
+      // Non-verbal description (actions, expressions, the setting) is the
+      // factor most consistently tied to retention after reply length.
+      add("no_actions", "Ground this reply with one brief physical or scene beat; the last three replies had none.");
+    }
+  }
+  if (assistant.slice(-2).some(narratesUser)) {
+    add("agency", "Leave the user's body, feelings and reactions to the user; show only what the character does, says and can see.");
+  }
+
+  const skip = new Set(normTokens(input.characterName ?? ""));
+  const retire = [...stockTics(assistant), ...repeatedPhrases(assistant, skip)].slice(0, 4);
+  if (retire.length) add("retire", `Retire for now (used too often): ${quoted(retire)}. Use something specific to this moment instead.`);
+
+  if (last?.role === "user" && !input.sceneDirective?.trim()) {
+    const beat = classifyUserBeat(input.latestUserText);
+    if (beat === "rapid" && input.adaptiveRhythm) {
+      add("brief_beat", "The user\u2019s turn is brief. If it is light (a greeting, an acknowledgement, banter) a compact reply fits and needs no padding; if it carries feeling, news or a decision, answer it fully.");
+    } else if (beat === "weighty") {
+      add("weighty_beat", "This turn carries weight: give it the full range, and show the reaction through what the character does as well as says.");
+    }
+  }
+  return steer;
+}
+
+/** The steers as a prompt block ("" when there are none), ready to append next to the other per-turn guards. */
+export function formatTurnSteers(steers: Steer[]): string {
+  if (!steers.length) return "";
+  return `\n\nTURN DIRECTOR (apply silently, this turn only)\n- ${steers.map(s => s.text).join("\n- ")}`;
+}
 
 /**
  * Returns "" or a short block that starts with a blank line, ready to append
  * to the system prompt next to the other per-turn guards.
  */
 export function buildTurnDirective(input: TurnDirectorInput): string {
-  const turns = input.history.filter(m => m.role === "user" || m.role === "assistant");
-  const last = turns[turns.length - 1];
-  const assistant = turns.filter(m => m.role === "assistant").map(m => m.content).filter(c => c.trim());
-  const steer: string[] = [];
-
-  const shapes = assistant.slice(-SHAPE_WINDOW).map(analyzeReply);
-  const userUsedNarration = splitRoleplayInput(input.latestUserText ?? "").some(seg => seg.kind === "narration");
-  if (shapes.length >= QUESTION_RUN) {
-    if (shapes.slice(-QUESTION_RUN).every(s => s.ending === "question")) {
-      steer.push("Close on an action, a line that lands, or a change in the scene. The last two replies both ended on a question.");
-    }
-  }
-  if (shapes.length === SHAPE_WINDOW) {
-    // Only runs of the same habit are steered. A speech-only chat is a valid
-    // style (the user may be writing plain speech), so a run of speech
-    // openings is never pushed toward actions.
-    if (shapes.every(s => s.opening === "action")) {
-      steer.push("Open with the character's spoken words; the last three replies all opened with an action.");
-    }
-    if (shapes[0].openingWord && shapes.every(s => s.openingWord === shapes[0].openingWord)) {
-      steer.push(`Start with a different first word than ${JSON.stringify(shapes[0].openingWord)}.`);
-    }
-    if (shapes.every(s => s.actions >= 2)) {
-      steer.push("Use at most one action beat and let speech carry the turn; the last three replies were action-heavy.");
-    } else if (userUsedNarration && shapes.every(s => s.actions === 0)) {
-      // The user is playing in the scene with actions of their own, so the
-      // character answering with none reads as a different kind of chat.
-      steer.push("Ground this reply with one brief physical or scene beat; the last three replies had none.");
-    }
-  }
-  if (assistant.slice(-2).some(narratesUser)) {
-    steer.push("Leave the user's body, feelings and reactions to the user; show only what the character does, says and can see.");
-  }
-
-  const skip = new Set(normTokens(input.characterName ?? ""));
-  const retire = [...stockTics(assistant), ...repeatedPhrases(assistant, skip)].slice(0, 4);
-  if (retire.length) steer.push(`Retire for now (used too often): ${quoted(retire)}. Use something specific to this moment instead.`);
-
-  if (last?.role === "user" && !input.sceneDirective?.trim()) {
-    const beat = classifyUserBeat(input.latestUserText);
-    if (beat === "rapid") steer.push("The user\u2019s turn is brief. If it is light (a greeting, an acknowledgement, banter) a compact reply fits and needs no padding; if it carries feeling, news or a decision, answer it fully.");
-    else if (beat === "weighty") steer.push("This turn carries weight: give it the full range, and show the reaction through what the character does as well as says.");
-  }
-
-  if (!steer.length) return "";
-  return `\n\nTURN DIRECTOR (apply silently, this turn only)\n- ${steer.join("\n- ")}`;
+  return formatTurnSteers(planTurnSteers(input));
 }

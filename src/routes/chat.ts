@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { createHash } from "node:crypto";
 import { buildAwarenessTurnGuard } from "../lib/conversationAwareness";
-import { buildTurnDirective } from "../lib/providers/turnDirector";
+import { formatTurnSteers, planTurnSteers } from "../lib/providers/turnDirector";
+import { resolveArms } from "../lib/roleplayFlags";
+import { logReplyTelemetry } from "../lib/replyTelemetry";
+import { anchorPlacement, buildRecencyAnchor, insertTailSystemMessage, withRecencyAnchor } from "../lib/providers/recencyAnchor";
 import { buildStoryContext } from "../lib/storyContext";
 import type { Prisma } from "@prisma/client";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -465,12 +468,20 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   ];
   // Keep identity guidance in system context. User speech remains unchanged,
   // including during regeneration and scene continuation.
-  if (!compactHazelnut) withPersonaAnchor(chatMessages, character, intelligence);
+  // Sticky per-user experiment arms (see roleplayFlags.ts). The persona
+  // reminder moves to the END of the context, where attention is strongest:
+  // the old suffix on the system message had no recency at all and was skipped
+  // on the default Plus path. A user in the control arm keeps the old behaviour.
+  const arms = resolveArms(userId);
+  const anchorMode = anchorPlacement();
+  const tailAnchor = arms.personaAnchor && anchorMode === "tail" ? buildRecencyAnchor(character) : "";
+  if (arms.personaAnchor && anchorMode === "system") withRecencyAnchor(chatMessages, character, "system");
+  else if (!arms.personaAnchor && !compactHazelnut) withPersonaAnchor(chatMessages, character, intelligence);
   // Fresh on every request, including engine switches and regeneration; never
   // cache turn-specific pacing inside the reusable character prompt.
   const latestUserText = [...recentHistory].reverse().find(m => m.role === "user")?.content ?? "";
   const lastIsUserTurn = relevant[relevant.length - 1]?.role === "user";
-  const replyPlan = planReply(intelligence, lastIsUserTurn ? latestUserText : "", sceneDirective);
+  const replyPlan = planReply(intelligence, lastIsUserTurn ? latestUserText : "", sceneDirective, { adaptiveRhythm: arms.adaptiveRhythm });
   genParams.maxTokens = replyPlan.maxTokens;
   genParams.continuationMaxTokens = replyPlan.continuationMaxTokens;
   genParams.preserveStreamedLength = replyPlan.preserveStreamedLength;
@@ -480,11 +491,15 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   chatMessages[0].content += `\n\n${replyPlan.instruction}`;
   // Include this per-turn guard in Hazelnut's context budgeting, not the cached
   // persona prompt. Keep it after recalled evidence at the provider boundary.
+  const turnSteers = arms.director
+    ? planTurnSteers({ history: relevant, latestUserText, characterName: character.name, sceneDirective,
+        adaptiveRhythm: arms.adaptiveRhythm, actionCap: arms.actionCap })
+    : [];
   const inputTurnGuard = buildAwarenessTurnGuard(relevant) +
     (relevant[relevant.length - 1]?.role === "user" ? buildRoleplayTurnGuard(latestUserText) : "") +
     // Deterministic shape steer from the character's own recent replies
     // (opening/closing habits, stock phrases) and the size of the user's beat.
-    buildTurnDirective({ history: relevant, latestUserText, characterName: character.name, sceneDirective });
+    formatTurnSteers(turnSteers);
   if (compactHazelnut) {
     const query = buildRecallQuery(relevant, sceneDirective);
     const terms = recallTerms(query);
@@ -522,13 +537,13 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       }
     }
     const selection = selectHazelnutContext({ history: relevant, recalled, query,
-      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard) });
+      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailAnchor) });
     chatMessages = [{ role: "system", content: chatMessages[0].content + selection.memory }, ...selection.messages];
     console.log(`[hazelnut-context] ${JSON.stringify(selection.diagnostics)}`);
   } else if (recentHistory.length < relevant.length) {
     // If summaries lag, keep complete recent exchanges plus relevant older
     // evidence instead of silently discarding the intervening scene/constraints.
-    const systemTokens = estimateTokens(chatMessages[0].content + inputTurnGuard);
+    const systemTokens = estimateTokens(chatMessages[0].content + inputTurnGuard + tailAnchor);
     const selection = selectHazelnutContext({ history: relevant,
       query: buildRecallQuery(relevant, sceneDirective), systemTokens,
       targetTokens: systemTokens + Math.max(1800, recentWindow * 180) });
@@ -536,6 +551,9 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   }
 
   chatMessages[0].content += inputTurnGuard;
+  // Inserted only after the context budget has rebuilt chatMessages above,
+  // otherwise the rebuild would silently drop it.
+  if (tailAnchor) insertTailSystemMessage(chatMessages, tailAnchor);
   // Label input only at the provider boundary; saved messages remain original.
   chatMessages = chatMessages.map(m => m.role === "user"
     ? { ...m, content: formatRoleplayInput(m.content) } : m);
@@ -628,6 +646,17 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
         await prisma.message.upsert({ where: { id: `${turnId}-reply` }, update: { content: finalText }, create: { id: `${turnId}-reply`, characterId, userId, role: "assistant", content: finalText } });
       } else {
         await prisma.message.create({ data: { characterId, userId, role: "assistant", content: finalText } });
+      }
+
+      // One content-free, pseudonymous record per reply for the A/B and drift
+      // analysis (see replyTelemetry.ts). A regeneration replaces an earlier
+      // reply for the same turn, so it is not counted a second time.
+      if (!regenTargetId && !stopController.signal.aborted) {
+        logReplyTelemetry({
+          userId, characterId, engineId: engine?.id ?? "none", intelligence, arms,
+          beat: replyPlan.beat, steerIds: turnSteers.map(s => s.id),
+          turn: (character.summarizedThrough ?? 0) + relevant.length, reply: finalText,
+        });
       }
 
       if (!stopController.signal.aborted) {

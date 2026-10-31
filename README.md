@@ -4,7 +4,7 @@ Latest audit: see [DEBUG_REPORT_2026-09-28.md](DEBUG_REPORT_2026-09-28.md) for f
 
 Node.js 22 or newer + TypeScript backend for RoliChat.
 
-See `ROLEPLAY_REDESIGN.md` for the roleplay response redesign (craft block, turn director, reply polish, adaptive rhythm). See `TWO_ENGINES.md` for the current engine and membership layout (Strawberry free, Choco Hazelnut plus). See `AWARENESS_UPGRADE.md` for the latest character-awareness and memory-reset changes; `MODEL_REPLY_DEBUG_REPORT.md` and `RELIABILITY_DEBUG_REPORT.md` document earlier reply and reliability fixes. Existing users upgrading from before the reliability release must sign in again once because session tokens now become invalid when passwords change.
+See `ROLEPLAY_REDESIGN.md` for the roleplay response redesign (craft block, turn director, reply polish, adaptive rhythm). See `TOKEN_REDUCTION.md` for the input-token reduction, the guards that keep it, and the levers left for you to decide (`npm run report:prompt` shows per-block sizes). See `TWO_ENGINES.md` for the current engine and membership layout (Strawberry free, Choco Hazelnut plus). See `AWARENESS_UPGRADE.md` for the latest character-awareness and memory-reset changes; `MODEL_REPLY_DEBUG_REPORT.md` and `RELIABILITY_DEBUG_REPORT.md` document earlier reply and reliability fixes. Existing users upgrading from before the reliability release must sign in again once because session tokens now become invalid when passwords change.
 
 ## Required project files
 

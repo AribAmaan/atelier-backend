@@ -114,9 +114,35 @@ services:
       - key: ENFORCE_ENGINE_TIERS
         value: "false"
 
-      # Reply rhythm. "true" (default): when the user's turn is a quick beat of a
-      # few words, the tier's word FLOOR and aim relax to ~60% / ~80% so a "hi"
-      # is not padded to a full paragraph. The word CEILING, token budget and
-      # engine quality never change. Set "false" for the old fixed floor.
+      # ---- Roleplay experiments (see ROLEPLAY_REDESIGN.md) ------------------
+      # Each flag takes on | off | split:N (N% of users, chosen by a stable hash
+      # of the user id, so a user stays in one arm for the whole test).
+      #
+      # Shorter replies on a brief, light user turn. OFF by default: the only
+      # real-user retention study found longer replies retain better, so this
+      # is a hypothesis to measure, not a default. Ceiling never changes.
       - key: ADAPTIVE_REPLY_RHYTHM
-        value: "true"
+        value: "off"
+      # Per-turn form steers (varied openings, no closing-question loop, retire
+      # stock phrases, don't speak for the user). ON by default.
+      - key: ROLEPLAY_DIRECTOR
+        value: "on"
+      # Cap action beats after three action-heavy replies. OFF by default
+      # because non-verbal description correlated with retention.
+      - key: ROLEPLAY_ACTION_CAP
+        value: "off"
+      # Short persona reminder placed just before the final message, to resist
+      # persona drift in long chats. ON by default.
+      - key: ROLEPLAY_PERSONA_ANCHOR
+        value: "on"
+      # "tail" (default) = its own system message before the final message.
+      # Use "system" if a custom model's chat template rejects a later system turn.
+      - key: ROLEPLAY_ANCHOR_PLACEMENT
+        value: "tail"
+      # One content-free, pseudonymous log line per reply for the A/B report
+      # (npm run report:roleplay). "off" disables it. Changing the salt unlinks
+      # all earlier records.
+      - key: ROLEPLAY_TELEMETRY
+        value: "on"
+      - key: ROLEPLAY_TELEMETRY_SALT
+        sync: false # set any random string in the Render dashboard

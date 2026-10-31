@@ -1,4 +1,5 @@
 import { classifyUserBeat, type UserBeat } from "./turnDirector";
+import { flagEnabled } from "../roleplayFlags";
 
 /**
  * Reply length and quality are engine properties first and user-message
@@ -6,12 +7,13 @@ import { classifyUserBeat, type UserBeat } from "./turnDirector";
  * never move: a greeting, long narration, an action-only turn, or a request to
  * be "short"/"detailed" cannot inflate or downgrade the selected tier.
  *
- * One deliberate exception (ADAPTIVE_REPLY_RHYTHM, on by default, set to
- * "false" to restore the fixed floor): when the user's turn is a quick beat of
- * a few words, the tier's word FLOOR and aim relax to ~60% / ~80%. Real
- * conversation has rhythm, and forcing a one-word "hi" up to a full paragraph
- * made the depth top-up pad replies with filler or restart them. Weighty and
- * ordinary turns keep the full tier envelope.
+ * One experiment arm (ADAPTIVE_REPLY_RHYTHM, OFF by default; "on" or
+ * "split:N" enables it, see roleplayFlags.ts): when the user's turn is a brief
+ * beat of a few words, the tier's word FLOOR and aim relax to ~60% / ~80% so a
+ * "hi" is not padded to a full paragraph. It is off by default because the
+ * only real-user retention study found longer replies retain better, so
+ * shortening a reply is a hypothesis to measure, not a default. Weighty and
+ * ordinary turns always keep the full tier envelope.
  */
 export function replyProfile(intelligence: number) {
   // Manual (no engine selected) mode runs at intelligence 5.
@@ -127,19 +129,20 @@ export function clampReplyToWordCeiling(text: string, maxWords: number, minWords
 const RAPID_FLOOR = 0.6;
 const RAPID_AIM = 0.8;
 
+/** The no-user control value of the adaptive-rhythm flag (default off; see roleplayFlags.ts). */
 export function adaptiveRhythmEnabled(): boolean {
-  return process.env.ADAPTIVE_REPLY_RHYTHM !== "false";
+  return flagEnabled("adaptiveRhythm");
 }
 
-export function buildReplyGuidance(intelligence: number, beat: UserBeat = "normal"): string {
+export function buildReplyGuidance(intelligence: number, beat: UserBeat = "normal", adaptive: boolean = adaptiveRhythmEnabled()): string {
   const p = replyProfile(intelligence);
-  const rapid = beat === "rapid" && adaptiveRhythmEnabled();
+  const rapid = beat === "rapid" && adaptive;
   const aim = rapid ? Math.round(p.ordinaryWords * RAPID_AIM) : p.ordinaryWords;
   const floor = rapid ? Math.max(20, Math.round(p.minWords * RAPID_FLOOR)) : p.minWords;
   const size = rapid
     ? `The user's turn is brief. If it is light (a greeting, an acknowledgement, banter), a compact reply of about ${aim} words (${floor}\u2013${p.maxWords}) is natural; if it carries feeling, news or a decision, use the fuller ${p.minWords}\u2013${p.maxWords}.`
     : `Aim for around ${aim} words, normally ${floor}\u2013${p.maxWords} words.`;
-  return `TIER-LOCKED REPLY ENVELOPE \u2014 ${p.name}: ${p.purpose}. ${size} ${p.maxWords} is the hard ceiling and it does not change with the length or format of the user's message. The engine's quality does not drop for a brief, long, narration-only or action-only turn. Answer its actual point and develop one coherent character beat to this tier's depth. Every sentence must contribute: a relevant response, choice, consequence, or useful detail. Do not pad with repeated emotions, gestures, recaps, or automatic questions. Start wrapping up before the ceiling; finish the current sentence instead of opening a new thread. Do not imitate earlier reply lengths or another engine.`;
+  return `TIER-LOCKED REPLY ENVELOPE \u2014 ${p.name}: ${p.purpose}. ${size} ${p.maxWords} is the hard ceiling and it does not change with the length or format of the user's message. The engine's quality does not drop for a brief, long, narration-only or action-only turn. Develop one coherent character beat to this tier's depth. Every sentence must contribute: a relevant response, choice, consequence, or useful detail. Do not pad with repeated emotions, gestures, recaps, or automatic questions. Start wrapping up before the ceiling; finish the current sentence instead of opening a new thread. Do not imitate earlier reply lengths.`;
 }
 
 /**
@@ -147,10 +150,11 @@ export function buildReplyGuidance(intelligence: number, beat: UserBeat = "norma
  * only for a quick user beat (see the header comment). A scene steer from the
  * quick-action chips always gets the normal envelope.
  */
-export function planReply(intelligence: number, latestUserText: string, sceneDirective = "") {
+export function planReply(intelligence: number, latestUserText: string, sceneDirective = "", opts: { adaptiveRhythm?: boolean } = {}) {
   const p = replyProfile(intelligence);
   const beat: UserBeat = sceneDirective.trim() ? "normal" : classifyUserBeat(latestUserText);
-  const rapid = beat === "rapid" && adaptiveRhythmEnabled();
+  const adaptive = opts.adaptiveRhythm ?? adaptiveRhythmEnabled();
+  const rapid = beat === "rapid" && adaptive;
   const minWords = rapid ? Math.max(20, Math.round(p.minWords * RAPID_FLOOR)) : p.minWords;
   return {
     mode: "tier" as const,
@@ -162,6 +166,6 @@ export function planReply(intelligence: number, latestUserText: string, sceneDir
     targetWords: rapid ? Math.max(minWords, Math.round(p.ordinaryWords * RAPID_AIM)) : p.ordinaryWords,
     minWords,
     maxWords: p.maxWords,
-    instruction: buildReplyGuidance(intelligence, beat),
+    instruction: buildReplyGuidance(intelligence, beat, adaptive),
   };
 }

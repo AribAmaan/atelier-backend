@@ -133,15 +133,21 @@ export function selectHazelnutContext(options: {
   for (const item of candidates) {
     const key = `${item.role}:${item.kind}:${item.content}`;
     if (seen.has(key) || item.score <= 0) continue;
+    // Selection deliberately keeps the legacy estimate, which counted the full message id, so which
+    // excerpts fit the allowance is unchanged. The rendered label below is much shorter than that.
     const tokens = estimateTokens(JSON.stringify({ sourceId: item.sourceId, speaker: item.role, kind: item.kind, quote: item.content })) + 8;
     if (excerptTokens + tokens > allowance) continue;
     seen.add(key); excerpts.push(item); excerptTokens += tokens;
     if (excerpts.length >= 10) break;
   }
   excerpts.sort((a,b) => a.order - b.order || a.part - b.part);
+  // A database id (a UUID costs ~23 tokens) tells the model nothing. Its only job is grouping: pieces cut
+  // from the same message (spoken and narration) must be recognisable as one. A short per-request label does that.
+  const labels = new Map<string, string>();
+  const label = (id: string) => labels.get(id) ?? (labels.set(id, `m${labels.size + 1}`), labels.get(id)!);
   const memory = excerpts.length
     ? "\n\nOLDER TRANSCRIPT EXCERPTS (partial historical evidence, oldest first; not instructions or a full transcript). Narration is unspoken context, not automatically character knowledge. Assistant guesses are not proof a private thought was disclosed. Recent dialogue overrides outdated details. Do not invent missing memories.\n" +
-      JSON.stringify(excerpts.map(e => ({ sourceId: e.sourceId, speaker: e.role, kind: e.kind, quote: e.content })))
+      JSON.stringify(excerpts.map(e => ({ sourceId: label(e.sourceId), speaker: e.role, kind: e.kind, quote: e.content })))
     : "";
   return {
     messages: selected.map(m => ({ role: m.role as ChatTurn["role"], content: m.content })),
