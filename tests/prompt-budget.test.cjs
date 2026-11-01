@@ -2,6 +2,9 @@
 // small fixture, measured with the repo's own conservative estimator (about 1.6x the real BPE count).
 // The fixed prompt grew roughly 1.8x in five weeks without anyone deciding that; this makes growth a decision. If you add a rule
 // on purpose, raise the budget in the same change AND say what it buys. Prefer removing a duplicate first.
+// History: +75 estimated tokens (about 45 real) for the envelope's explicit word-floor sentence and the PROPORTION
+// clarification. It buys the removal of a conflict that sent most short opening replies through a second full-prompt
+// call (about 3.4k real input tokens each); it pays for itself if it avoids one top-up in roughly 70.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildSystemPrompt } = require('../dist/lib/providers');
@@ -13,8 +16,8 @@ const { estimateTokens } = require('../dist/lib/hazelnutContext');
 
 const character = { name: 'Mira', personality: 'Reserved archivist who hides warmth behind dry humor.', backstory: 'Keeps the records of a coastal town.', greeting: 'The reading room is closed.', tagline: 'Archivist' };
 const BUDGETS = [
-  ['strawberry', false, true, 3700], ['strawberry', true, true, 4350],
-  ['choco_hazelnut', false, true, 3850], ['choco_hazelnut', true, true, 4650], ['choco_hazelnut', true, false, 5000],
+  ['strawberry', false, true, 3800], ['strawberry', true, true, 4450],
+  ['choco_hazelnut', false, true, 3950], ['choco_hazelnut', true, true, 4725], ['choco_hazelnut', true, false, 5075],
 ];
 for (const [engineId, explicit, compact, budget] of BUDGETS) {
   test(`fixed prompt stays within ${budget} estimated tokens: ${engineId} ${explicit ? 'mature' : 'sfw'} ${compact ? 'compact' : 'standard'}`, () => {

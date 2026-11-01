@@ -36,6 +36,29 @@ export type TurnUsage = {
 };
 const usageContext = new AsyncLocalStorage<TurnUsage>();
 
+/** Per-REPLY totals for the 60s window. The per-provider table above averages per CALL, so a reply that needed a
+ * depth top-up (a second call that resends the whole prompt) looks half as expensive there as it really is. */
+export type ReplyWindow = { replies: number; withContinuation: number; promptTokens: number; completionTokens: number; incomplete: number };
+const emptyWindow = (): ReplyWindow => ({ replies: 0, withContinuation: 0, promptTokens: 0, completionTokens: 0, incomplete: 0 });
+let replyWindow = emptyWindow();
+
+export function noteReplyForWindow(usage: TurnUsage, usageComplete: boolean, window: ReplyWindow = replyWindow) {
+  if (usage.kind !== "reply") return;
+  window.replies++;
+  if ((usage.continuations ?? 0) > 0) window.withContinuation++;
+  window.promptTokens += usage.promptTokens;
+  window.completionTokens += usage.completionTokens;
+  if (!usageComplete) window.incomplete++;
+}
+
+export function formatReplyWindow(w: ReplyWindow): string | undefined {
+  if (w.replies === 0) return undefined;
+  const pct = Math.round((w.withContinuation / w.replies) * 100);
+  return `[tokens] replies: ${w.replies} | with top-up/continuation: ${w.withContinuation} (${pct}%) | ` +
+    `avg input per reply: ${Math.round(w.promptTokens / w.replies)} | avg output per reply: ${Math.round(w.completionTokens / w.replies)}` +
+    (w.incomplete > 0 ? ` | ${w.incomplete} with unreported calls (timeouts/cancels), so these are lower bounds` : "");
+}
+
 export function recordProviderAttempt() {
   const usage = usageContext.getStore();
   if (usage) usage.attempts++;
@@ -61,7 +84,11 @@ export async function withTokenAccounting<T>(
       succeeded = true;
       return result;
     }
-    finally { report({ ...usage, succeeded, usageComplete: usage.attempts > 0 && usage.attempts === usage.reportedCalls }); }
+    finally {
+      const usageComplete = usage.attempts > 0 && usage.attempts === usage.reportedCalls;
+      if (succeeded) noteReplyForWindow(usage, usageComplete);
+      report({ ...usage, succeeded, usageComplete });
+    }
   });
 }
 
@@ -94,7 +121,9 @@ export function recordTokenUsage(
 
 function logTokenStats() {
   const entries = [...tokenStats.entries()];
-  if (entries.length === 0) return;
+  const replySummary = formatReplyWindow(replyWindow);
+  replyWindow = emptyWindow();
+  if (entries.length === 0 && !replySummary) return;
   console.log("\n[tokens] === Token usage (last 60s) ===");
   for (const [key, stats] of entries) {
     const avgPrompt = Math.round(stats.promptTokens / stats.requests);
@@ -107,6 +136,7 @@ function logTokenStats() {
         `cached: ${String(cachePct).padStart(3)}% | total: ${stats.promptTokens + stats.completionTokens}`
     );
   }
+  if (replySummary) console.log(replySummary);
   console.log("[tokens] ==========================================\n");
   for (const [key] of entries) {
     tokenStats.delete(key);

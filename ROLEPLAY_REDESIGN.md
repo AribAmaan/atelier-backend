@@ -69,7 +69,7 @@ Engine ids, tiers, billing, temperatures, token budgets, reply **ceilings** (70 
 
 ## Cost
 
-> Superseded by `TOKEN_REDUCTION.md`: duplicated rules were later removed (about 3-7% fewer real input tokens, budgets enforced by `tests/prompt-budget.test.cjs`). The table below is the original redesign measurement.
+> Superseded by `TOKEN_REDUCTION.md`: duplicated rules were later removed (about 1-6% fewer real input tokens per call, plus a fix for double-sent prompts, budgets enforced by `tests/prompt-budget.test.cjs`). The table below is the original redesign measurement.
 
 Estimated input tokens per request (repo's `estimateTokens`, conservative), system prompt + reply guidance + persona reminder, original vs now:
 

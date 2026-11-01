@@ -141,7 +141,7 @@ export function buildReplyGuidance(intelligence: number, beat: UserBeat = "norma
   const floor = rapid ? Math.max(20, Math.round(p.minWords * RAPID_FLOOR)) : p.minWords;
   const size = rapid
     ? `The user's turn is brief. If it is light (a greeting, an acknowledgement, banter), a compact reply of about ${aim} words (${floor}\u2013${p.maxWords}) is natural; if it carries feeling, news or a decision, use the fuller ${p.minWords}\u2013${p.maxWords}.`
-    : `Aim for around ${aim} words, normally ${floor}\u2013${p.maxWords} words.`;
+    : `Aim for around ${aim} words, normally ${floor}\u2013${p.maxWords} words. Even a greeting or a one-line message gets at least ${floor} words: use the room for one concrete action or detail and a move of the character's own, never filler.`;
   return `TIER-LOCKED REPLY ENVELOPE \u2014 ${p.name}: ${p.purpose}. ${size} ${p.maxWords} is the hard ceiling and it does not change with the length or format of the user's message. The engine's quality does not drop for a brief, long, narration-only or action-only turn. Develop one coherent character beat to this tier's depth. Every sentence must contribute: a relevant response, choice, consequence, or useful detail. Do not pad with repeated emotions, gestures, recaps, or automatic questions. Start wrapping up before the ceiling; finish the current sentence instead of opening a new thread. Do not imitate earlier reply lengths.`;
 }
 

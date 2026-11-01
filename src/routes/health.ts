@@ -2,6 +2,7 @@ import { Router } from "express";
 import { asyncHandler } from "../lib/asyncHandler";
 import { prisma } from "../lib/db";
 import { listAvailableProviders } from "../lib/providers";
+import { createDbFailureLogger } from "../lib/dbFailureLog";
 
 const router = Router();
 
@@ -9,13 +10,14 @@ const router = Router();
 // similar) keep-warm ping. Checks the DB connection and reports whether any
 // chat provider is currently configured/reachable, without triggering any
 // circuit breaker state — this never calls a provider, just checks isAvailable().
+const dbFailures = createDbFailureLogger();
 let cached: { expiresAt: number; status: number; body: Record<string, unknown> } | undefined;
 let pending: Promise<NonNullable<typeof cached>> | undefined;
 async function checkHealth() {
   const startedAt = Date.now();
   let dbOk = true;
-  try { await prisma.$queryRaw`SELECT 1`; }
-  catch (err) { dbOk = false; console.error("[health] database check failed:", err); }
+  try { await prisma.$queryRaw`SELECT 1`; dbFailures.ok(); }
+  catch (err) { dbOk = false; dbFailures.failed(err); }
   const providers = await listAvailableProviders().catch(() => []);
   return { expiresAt: Date.now() + 5000, status: dbOk ? 200 : 503,
     body: { ok: dbOk, database: dbOk ? "up" : "down", chatAvailable: providers.length > 0, checkedInMs: Date.now() - startedAt } };
