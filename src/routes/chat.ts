@@ -496,6 +496,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   // persona prompt. Keep it after recalled evidence at the provider boundary.
   const turnSteers = arms.director
     ? planTurnSteers({ history: relevant, latestUserText, characterName: character.name, sceneDirective,
+        knownFacts: [character.tagline, character.personality, character.backstory, character.greeting, character.roleplayNotes, character.memorySummary].filter(Boolean).join(" "),
         adaptiveRhythm: arms.adaptiveRhythm, actionCap: arms.actionCap })
     : [];
   const inputTurnGuard = buildAwarenessTurnGuard(relevant) +
