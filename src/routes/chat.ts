@@ -489,6 +489,9 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   genParams.minWords = replyPlan.minWords;
   genParams.maxWords = replyPlan.maxWords;
   chatMessages[0].content += `\n\n${replyPlan.instruction}`;
+  // The same envelope, restated next to the final message (see buildLengthReminder).
+  // Honors ROLEPLAY_ANCHOR_PLACEMENT=system for models that reject a later system turn.
+  const tailNote = [tailAnchor, anchorMode === "tail" ? replyPlan.lengthReminder : ""].filter(Boolean).join("\n");
   // Include this per-turn guard in Hazelnut's context budgeting, not the cached
   // persona prompt. Keep it after recalled evidence at the provider boundary.
   const turnSteers = arms.director
@@ -537,13 +540,13 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       }
     }
     const selection = selectHazelnutContext({ history: relevant, recalled, query,
-      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailAnchor) });
+      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote) });
     chatMessages = [{ role: "system", content: chatMessages[0].content + selection.memory }, ...selection.messages];
     console.log(`[hazelnut-context] ${JSON.stringify(selection.diagnostics)}`);
   } else if (recentHistory.length < relevant.length) {
     // If summaries lag, keep complete recent exchanges plus relevant older
     // evidence instead of silently discarding the intervening scene/constraints.
-    const systemTokens = estimateTokens(chatMessages[0].content + inputTurnGuard + tailAnchor);
+    const systemTokens = estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote);
     const selection = selectHazelnutContext({ history: relevant,
       query: buildRecallQuery(relevant, sceneDirective), systemTokens,
       targetTokens: systemTokens + Math.max(1800, recentWindow * 180) });
@@ -553,7 +556,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   chatMessages[0].content += inputTurnGuard;
   // Inserted only after the context budget has rebuilt chatMessages above,
   // otherwise the rebuild would silently drop it.
-  if (tailAnchor) insertTailSystemMessage(chatMessages, tailAnchor);
+  if (tailNote) insertTailSystemMessage(chatMessages, tailNote);
   // Label input only at the provider boundary; saved messages remain original.
   chatMessages = chatMessages.map(m => m.role === "user"
     ? { ...m, content: formatRoleplayInput(m.content) } : m);

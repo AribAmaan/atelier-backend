@@ -1,5 +1,6 @@
 import { classifyUserBeat, type UserBeat } from "./turnDirector";
 import { flagEnabled } from "../roleplayFlags";
+import { LENGTH_MARKER } from "./recencyAnchor";
 
 /**
  * Reply length and quality are engine properties first and user-message
@@ -146,6 +147,19 @@ export function buildReplyGuidance(intelligence: number, beat: UserBeat = "norma
 }
 
 /**
+ * One short line placed as its own system message right before the final
+ * message. The full envelope lives at the top of the system prompt, which is
+ * the part of the context a model attends to least when it writes; on a short
+ * user turn ("hi") the recent history wins and the first pass stops far below
+ * the floor. Restating the numbers at the point of generation makes the FIRST
+ * pass land in range, so the silent same-provider top-up is a rare safety net
+ * rather than the normal path.
+ */
+export function buildLengthReminder(minWords: number, targetWords: number, maxWords: number): string {
+  return `${LENGTH_MARKER} (apply silently): write ${minWords}\u2013${maxWords} words, aiming for about ${targetWords}, even if the user's message is a greeting or one line. Do not stop short of ${minWords}; finish your last sentence before ${maxWords}.`;
+}
+
+/**
  * Ceiling and token budget are input-invariant. Only the floor/aim relax, and
  * only for a quick user beat (see the header comment). A scene steer from the
  * quick-action chips always gets the normal envelope.
@@ -167,5 +181,6 @@ export function planReply(intelligence: number, latestUserText: string, sceneDir
     minWords,
     maxWords: p.maxWords,
     instruction: buildReplyGuidance(intelligence, beat, adaptive),
+    lengthReminder: buildLengthReminder(minWords, rapid ? Math.max(minWords, Math.round(p.ordinaryWords * RAPID_AIM)) : p.ordinaryWords, p.maxWords),
   };
 }

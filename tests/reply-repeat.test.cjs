@@ -119,3 +119,77 @@ test('two failed top-ups stop there and keep the original reply intact', async (
   assert.equal(calls.length, 3);
   assert.equal(result.text, shortReply);
 });
+
+test('a short first pass is held back so the reply never appears short and then grows', async () => {
+  const sentences = (n, tag) => Array.from({ length: n / 10 }, (_, i) =>
+    Array.from({ length: 10 }, (_, j) => `${tag}${i}w${j}`).join(' ') + '.').join(' ');
+  let call = 0;
+  const stream = async (_m, onToken, _s, p) => {
+    const text = call++ === 0 ? sentences(30, 'a') : sentences(90, 'b');
+    for (const piece of text.match(/\S+\s*/g)) onToken(piece);
+    p.onFinish('stop');
+    return text;
+  };
+  const emits = [];
+  const r = await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], c => emits.push(c), undefined,
+    { minWords: 105, maxWords: 130, targetWords: 120, maxTokens: 256, continuationMaxTokens: 160 });
+  const words = s => s.trim().split(/\s+/).length;
+  assert.equal(call, 2);
+  assert.equal(emits.length, 1, 'client receives the finished reply in one block');
+  assert.ok(words(emits[0]) >= 105 && words(emits[0]) <= 130);
+  assert.equal(emits.join('').trim(), r.text.trim());
+});
+
+test('a token cutoff below the floor is recovered silently: one finished block, no short-then-grow', async () => {
+  const sentences = (n, tag) => Array.from({ length: n / 10 }, (_, i) =>
+    Array.from({ length: 10 }, (_, j) => `${tag}${i}w${j}`).join(' ') + '.').join(' ');
+  const first = sentences(40, 'a');
+  let call = 0;
+  const stream = async (_m, onToken, _s, p) => {
+    const text = call++ === 0 ? first : first + ' ' + sentences(70, 'b'); // recovery echoes the tail, then continues
+    for (const piece of text.match(/\S+\s*/g)) onToken(piece);
+    p.onFinish(call === 1 ? 'length' : 'stop');
+    return text;
+  };
+  const emits = [];
+  const r = await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], c => emits.push(c), undefined,
+    { minWords: 105, maxWords: 130, targetWords: 120, maxTokens: 256, continuationMaxTokens: 160 });
+  const words = s => s.trim().split(/\s+/).length;
+  assert.ok(call >= 2);
+  assert.equal(emits.length, 1, 'client never sees the 40-word partial on its own');
+  assert.ok(words(emits[0]) > 40);
+  assert.equal(emits.join('').trim(), r.text.trim());
+});
+
+test('a first pass already at the floor still streams live (no hold)', async () => {
+  const sentences = (n, tag) => Array.from({ length: n / 10 }, (_, i) =>
+    Array.from({ length: 10 }, (_, j) => `${tag}${i}w${j}`).join(' ') + '.').join(' ');
+  const stream = async (_m, onToken, _s, p) => {
+    const text = sentences(120, 'c');
+    for (const piece of text.match(/\S+\s*/g)) onToken(piece);
+    p.onFinish('stop');
+    return text;
+  };
+  const emits = [];
+  await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], c => emits.push(c), undefined,
+    { minWords: 105, maxWords: 130, targetWords: 120, maxTokens: 256, continuationMaxTokens: 160 });
+  assert.ok(emits.length > 1, 'long-enough replies keep streaming');
+});
+
+test('the length envelope is restated as a tail system message next to the final turn', () => {
+  const { planReply } = require('../dist/lib/providers/replyPolicy');
+  const { insertTailSystemMessage, LENGTH_MARKER } = require('../dist/lib/providers/recencyAnchor');
+  const plan = planReply(9, 'hi', '', { adaptiveRhythm: false });
+  assert.match(plan.lengthReminder, /105.130 words/);
+  assert.match(plan.lengthReminder, /about 120/);
+  const msgs = [{ role: 'system', content: 'persona' }, { role: 'assistant', content: 'old' }, { role: 'user', content: 'hi' }];
+  insertTailSystemMessage(msgs, plan.lengthReminder);
+  insertTailSystemMessage(msgs, plan.lengthReminder); // idempotent
+  assert.equal(msgs.length, 4);
+  assert.equal(msgs[2].role, 'system');
+  assert.ok(msgs[2].content.startsWith(LENGTH_MARKER));
+  assert.equal(msgs[3].content, 'hi');
+  // Strawberry and Balanced get their own numbers.
+  assert.match(planReply(6, 'hi').lengthReminder, /50.70 words/);
+  assert.match(planReply(5, 'hi').lengthReminder, /40.60 words/);
+});

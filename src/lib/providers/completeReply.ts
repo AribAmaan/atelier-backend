@@ -62,8 +62,16 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
   // Publish complete sentences for every capped tier. Holding the unfinished
   // sentence prevents the final word ceiling from retracting visible text.
   // Sentence-sized buffering adds no provider call or token allowance.
+  //
+  // Tiers with a word floor also HOLD the reply until it has reached that
+  // floor (or the provider has finished). A first pass that stops at ~28
+  // words must never reach the screen before the same-provider depth top-up
+  // runs, otherwise the user sees a short reply sit there and then grow.
+  // Held text is published as one block once the final length is known.
   let streamedVisible = "";
   let providerVisible = "";
+  const holdForMinimum = maxWords > 0 && minWords > 0;
+  let released = !holdForMinimum;
   const cappedOnToken = maxWords > 0 ? (chunk: string) => {
     if (!chunk) return;
     providerVisible = (providerVisible + chunk).trimStart();
@@ -71,6 +79,10 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
     for (const end of replySentenceEnds(providerVisible)) {
       if (countWords(providerVisible.slice(0, end)) > maxWords) break;
       safeEnd = end;
+    }
+    if (!released) {
+      if (safeEnd > 0 && countWords(providerVisible.slice(0, safeEnd)) >= minWords) released = true;
+      else return;
     }
     if (safeEnd > streamedVisible.length) {
       const addition = providerVisible.slice(streamedVisible.length, safeEnd);
@@ -82,17 +94,32 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
   const completed = await stream(messages, cappedOnToken, signal, { ...params, onFinish: capture });
   const rawText = maxWords > 0 ? completed.trimStart() : completed;
   let text = maxWords > 0 ? clampReplyToWordCeiling(rawText, maxWords, minWords) : rawText;
-  if (maxWords > 0 && text.startsWith(streamedVisible)) {
-    const deferred = text.slice(streamedVisible.length);
-    if (deferred) onToken(deferred);
-  }
 
   let continuations = 0;
+
+  // Publish whatever part of `text` the client has not seen yet.
+  const flushDeferred = () => {
+    if (maxWords > 0 && text.startsWith(streamedVisible) && text.length > streamedVisible.length) {
+      onToken(text.slice(streamedVisible.length));
+      streamedVisible = text;
+    }
+  };
 
   // If the model ignored the prompt and already ran past the tier ceiling,
   // the saved/final reply is capped locally. Do not ask for an additional
   // continuation merely because the provider itself stopped on max_tokens.
   if (reason === "length" && maxWords > 0 && countWords(rawText) > maxWords) reason = "stop";
+
+  // A held, below-floor reply that is about to get a same-provider second call
+  // (depth top-up after a normal stop, or recovery after a token cutoff) stays
+  // back so the client only ever sees the finished reply, never a short one
+  // that pauses and then grows.
+  const topUpExpected = reason === "stop" && minWords > 0 && countWords(text) < minWords && text.trim() !== "" && !signal?.aborted;
+  const lengthRecoveryExpected = reason === "length" && text.trim() !== "" && !signal?.aborted && countWords(text) < maxWords;
+  if (!(holdForMinimum && !released && (topUpExpected || lengthRecoveryExpected))) flushDeferred();
+  if (text.trim() && (topUpExpected || lengthRecoveryExpected)) {
+    console.log(`[reply] first pass ${countWords(text)} words (finish=${reason}, floor=${minWords}, ceiling=${maxWords}) -> ${lengthRecoveryExpected ? "cutoff recovery" : "depth top-up"}${holdForMinimum && !released ? ", held until complete" : ""}`);
+  }
 
   while (reason === "length" && text.trim() && !signal?.aborted && continuations < 2 && (!maxWords || countWords(text) < maxWords)) {
     continuations++;
@@ -123,7 +150,8 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
         break;
       }
       text = combined;
-      onToken(accepted);
+      // Emits any held first-pass text together with the recovered tail.
+      if (maxWords > 0) flushDeferred(); else onToken(accepted);
       if (reason === "length" && maxWords > 0 && countWords(text) >= maxWords) reason = "stop";
     } catch {
       // Keep already-visible content; do not replace it with another provider.
@@ -175,7 +203,8 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
           accepted = combined.startsWith(text) ? combined.slice(text.length) : "";
           if (accepted) {
             text = combined;
-            onToken(accepted);
+            // Emits any held first-pass text together with the top-up.
+            if (maxWords > 0) flushDeferred(); else onToken(accepted);
             // Reaching a word minimum does not finish a sentence. Preserve
             // length/unknown/filter metadata so the UI can report a cutoff.
             reason = extensionReason;
@@ -190,6 +219,9 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
       if (accepted) break;
     }
   }
+
+  // Top-up added nothing (or failed): release the held first pass as-is.
+  flushDeferred();
 
   const finishReason = signal?.aborted ? "cancelled" : reason;
   params?.onFinish?.(finishReason);

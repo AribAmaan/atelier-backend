@@ -28,6 +28,7 @@ type Persona = { name: string; personality: string };
 export type AnchorPlacement = "tail" | "system";
 
 export const ANCHOR_MARKER = "CHARACTER REMINDER";
+export const LENGTH_MARKER = "REPLY LENGTH";
 
 export function anchorPlacement(): AnchorPlacement {
   return (process.env.ROLEPLAY_ANCHOR_PLACEMENT ?? "").trim().toLowerCase() === "system" ? "system" : "tail";
@@ -52,7 +53,7 @@ export function buildRecencyAnchor(character: Persona): string {
 
 /** Inserts `content` as a system message just before the final message. Safe to call twice. */
 export function insertTailSystemMessage(messages: Msg[], content: string): Msg[] {
-  if (messages.some(m => m.role === "system" && m.content.startsWith(ANCHOR_MARKER))) return messages;
+  if (messages.some(m => m.role === "system" && (m.content.startsWith(ANCHOR_MARKER) || m.content.startsWith(LENGTH_MARKER)))) return messages;
   const note: Msg = { role: "system", content };
   const lastIndex = messages.length - 1;
   // Index 0 is the persona system prompt; never insert ahead of it.
