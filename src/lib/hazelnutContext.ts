@@ -70,6 +70,18 @@ export function hazelnutInputBudget(): number {
   return Number.isFinite(value) && value >= 1600 && value <= 8000 ? Math.round(value) : 2800;
 }
 
+/**
+ * Extra tokens of recent exchanges to keep ON TOP of the protected last three turns, even when the
+ * persona/system prompt alone already exceeds the input target. Without it a long mature prompt
+ * (about 4.6k tokens here, against a 2.8k target) leaves the model only the last 3 exchanges.
+ * 0 restores the old behaviour.
+ */
+export function hazelnutMinHistoryTokens(): number {
+  const raw = process.env.HAZELNUT_MIN_HISTORY_TOKENS;
+  const value = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 4000 ? Math.round(value) : 1500;
+}
+
 /** Always keep the last three user turns and their replies verbatim. Budget is
  * soft: long current input, persona, and explicit boundaries win over savings.
  * Older excerpts are attributed, chronological data; they never become new turns.
@@ -80,6 +92,8 @@ export function selectHazelnutContext(options: {
   query: string;
   systemTokens: number;
   targetTokens?: number;
+  /** Guaranteed extra recent-history tokens beyond the protected turns (default 0: budget-only). */
+  minHistoryTokens?: number;
 }) {
   const { history, query } = options;
   const target = options.targetTokens ?? hazelnutInputBudget();
@@ -91,7 +105,7 @@ export function selectHazelnutContext(options: {
   // allowance alongside the protected exchanges so boundaries/callbacks do not
   // disappear precisely when grounding matters most. No irrelevant filler is
   // selected; the overflow is reported below rather than hidden.
-  const available = Math.max(used + 450, target - options.systemTokens - 100);
+  const available = Math.max(used + 450, target - options.systemTokens - 100, used + 450 + Math.max(0, options.minHistoryTokens ?? 0));
   // Reserve some room for a callback rather than filling everything with recency.
   const recentBudget = Math.max(used, available - 450);
   while (first > 0 && used + cost(turns[first - 1]) <= recentBudget) {

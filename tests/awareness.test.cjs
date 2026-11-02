@@ -159,6 +159,32 @@ test('every tier sends causal, attributed memory rules to the summary provider',
   }
 });
 
+test('mature-mode memory summaries keep explicit acts and vocabulary instead of a non-graphic cap', async () => {
+  const previousKey = process.env.NVIDIA_API_KEY;
+  const originalFetch = global.fetch;
+  const captured = [];
+  try {
+    process.env.NVIDIA_API_KEY = 'test-placeholder-no-live-call';
+    global.fetch = async (_url, init) => {
+      captured.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'Scene: explicit adult continuity kept.' }, finish_reason: 'stop' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    for (const engine of Object.values(ROLEPLAY_ENGINES)) {
+      await summarizeConversation(character, '', [msg('u', 'user', 'Keep going.')], true, engine.intelligence);
+    }
+    assert.equal(captured.length, Object.keys(ROLEPLAY_ENGINES).length);
+    for (const request of captured) {
+      const prompt = request.messages[0].content;
+      assert.doesNotMatch(prompt, /non-graphic|not graphically/i, 'old non-graphic summary cap is gone');
+      assert.match(prompt, /(sexual acts|intimacy).*(direct vocabulary|explicit)/i, 'summary keeps explicit continuity');
+    }
+  } finally {
+    global.fetch = originalFetch;
+    if (previousKey === undefined) delete process.env.NVIDIA_API_KEY;
+    else process.env.NVIDIA_API_KEY = previousKey;
+  }
+});
+
 test('every tier asks the summary for scene state; mid and top tiers also for voice (non-verbal continuity and personality)', async () => {
   const previousKey = process.env.NVIDIA_API_KEY;
   const originalFetch = global.fetch;

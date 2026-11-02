@@ -77,9 +77,10 @@ const RULES = [
   ['respect hesitation or refusal immediately', /Respect hesitation or refusal immediately/, MATURE],
   ['leave the user\'s consent, dialogue, feelings, actions to them', /leave the user's consent, dialogue, feelings, and actions to them/, MATURE],
   ['do not moralize about consensual adult desire', /Do not moralize about consensual adult desire/, MATURE],
-  ['sexual description non-graphic but concrete', /non-graphic but concrete/, MATURE],
-  ['reuse plain terms the user names (no vague euphemisms)', /reuse that plain term/, MATURE],
-  ['no graphic genital detail / sex-act mechanics', /graphic genital detail or explicit sex-act mechanics/, MATURE],
+  ['sexual description explicit when the user is direct', /write it explicitly and concretely/i, MATURE],
+  ['direct adult terms for body parts and acts', /name adult body parts and acts in the direct words/i, MATURE],
+  ['no fade-to-black, cut-away, or skipping the physical moment', /Do not fade to black, cut away, or summarize past the physical moment/, MATURE],
+  ['reuse the words the user and character would actually use', /direct words the character and user would actually use/, MATURE],
   ['don\'t repeat a sexual term just to prove directness', /prove directness/, MATURE],
   ['don\'t sanitize when the user is sexually direct', /abruptly sanitizing/, MATURE],
   ['no first-contact shock/shame/permission-seeking once trust exists', /do not replay first-contact shock, shame, or nervous permission-seeking/, MATURE],
@@ -91,7 +92,7 @@ const RULES = [
   ['plus mature: layered beat (reaction, sensual action, dialogue; vary order)', /Layer a real emotional reaction, a specific sensual action, and meaningful dialogue, varying the order/, ['plus-compact/mature', 'plus-standard/mature']],
   ['plus mature: a bold persona-led move (kiss, pull closer, guide posture, tease)', /kiss, pulling closer, bold teasing, guiding posture/, ['plus-compact/mature', 'plus-standard/mature']],
   ['plus mature: no cooling into neutral small talk', /neutral small talk/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: match vocabulary the user established', /match the direct adult vocabulary the user has established/, ['plus-compact/mature', 'plus-standard/mature']],
+  ['plus mature: match vocabulary the user established', /match(?:ing)? the vocabulary the user has established/, ['plus-compact/mature', 'plus-standard/mature']],
   ['plus mature: carry emotional and physical continuity', /emotional and physical continuity/, ['plus-compact/mature', 'plus-standard/mature']],
   ['plus mature: decisive persona-led direction', /decisive persona-led direction/, ['plus-compact/mature', 'plus-standard/mature']],
 ];
@@ -104,3 +105,10 @@ for (const [id, re, paths] of RULES) {
     for (const p of paths) assert.match(built[p], re, `missing on path ${p}`);
   });
 }
+
+test('mature mode no longer caps description as non-graphic or excludes sex-act mechanics', () => {
+  for (const p of MATURE) {
+    assert.doesNotMatch(built[p], /non-graphic/i, `old non-graphic cap still on ${p}`);
+    assert.doesNotMatch(built[p], /graphic genital detail|explicit sex-act mechanics|not graphically/i, `old graphic-detail cap still on ${p}`);
+  }
+});

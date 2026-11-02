@@ -29,7 +29,7 @@ import {
   withPersonaAnchor,
   maxTokensForIntelligence,
 } from "../lib/providers";
-import { estimateTokens, hazelnutContextEnabled, buildRecallQuery, recallTerms, selectHazelnutContext } from "../lib/hazelnutContext";
+import { estimateTokens, hazelnutContextEnabled, buildRecallQuery, recallTerms, selectHazelnutContext, hazelnutMinHistoryTokens } from "../lib/hazelnutContext";
 import { withTokenAccounting } from "../lib/providers/tokenStats";
 import { planReply } from "../lib/providers/replyPolicy";
 import { buildRoleplayTurnGuard, formatRoleplayInput } from "../lib/roleplayInput";
@@ -440,7 +440,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       ? `h${Math.round(minutesSinceLastMessage / 60)}`
       : `d${Math.round(minutesSinceLastMessage / (60 * 24))}`;
   const promptCacheKey = createHash("sha256").update(JSON.stringify([
-    compactHazelnut ? "compact-v8-craft" : "standard-v7-craft", characterId, character.name,
+    compactHazelnut ? "compact-v9-explicit" : "standard-v8-explicit", characterId, character.name,
     character.personality, character.backstory, character.roleplayNotes, character.tagline, character.greeting,
     character.memorySummary ?? "", character.examples ?? "", engine?.id ?? "none", explicitMode,
     spiceLevel, roleplayStyle, sceneDirective, voiceNotes, timeGapBucket,
@@ -541,7 +541,8 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       }
     }
     const selection = selectHazelnutContext({ history: relevant, recalled, query,
-      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote) });
+      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote),
+      minHistoryTokens: hazelnutMinHistoryTokens() });
     chatMessages = [{ role: "system", content: chatMessages[0].content + selection.memory }, ...selection.messages];
     console.log(`[hazelnut-context] ${JSON.stringify(selection.diagnostics)}`);
   } else if (recentHistory.length < relevant.length) {
