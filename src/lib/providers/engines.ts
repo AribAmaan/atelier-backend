@@ -34,7 +34,7 @@ function isEnginePaywallEnforced(): boolean {
  *
  * Each engine is differentiated by these axes:
  *   1. spiceLevel / roleplayStyle — broad heat-level and structural-style.
- *   2. voiceNotes — bespoke per-engine pacing/voice direction.
+ *   2. voiceNotes — optional per-engine voice direction (empty: left to the model).
  *   3. intelligence — a 1–10 score that drives prompt-level behavioral
  *      calibration (memory depth, emotional reasoning, environmental
  *      awareness, initiative, etc.) and the reply envelope (replyPolicy.ts).
@@ -100,8 +100,7 @@ export const ROLEPLAY_ENGINES: Record<RoleplayEngineId, RoleplayEngineConfig> = 
     intelligence: 6,
     recentMessageWindow: 11,
     summarizeTrigger: 18,
-    voiceNotes:
-      "Attentive and natural, like someone who is actually listening. Carry the mood forward, notice a relevant detail or hesitation, and make a small persona-consistent choice instead of only agreeing. Vary rhythm and openings naturally; let warmth, humor, or friction show in what the character does as well as says.",
+    voiceNotes: "",
     temperature: 0.79,
     topP: 0.92,
   },
@@ -120,8 +119,7 @@ export const ROLEPLAY_ENGINES: Record<RoleplayEngineId, RoleplayEngineConfig> = 
     // making memory summaries more frequent.
     recentMessageWindow: 15,
     summarizeTrigger: 31,
-    voiceNotes:
-      "Fully alive, specific, and present in the scene. Let emotion show through choices, pauses, proximity, and the unsaid, not only dialogue; hold subtext, uncertainty, history, desire, and boundaries at once, unexplained. Track relationship shifts and unresolved threads; recall an exact earlier detail only when it matters now. Take an independent, persona-consistent direction when the scene invites one instead of echoing the user. Keep an emotional phase across turns: uncertainty becomes trust, trust becomes confidence, and a comfortable character does not slide back to first-contact blushing without a new cause. Shyness is not a template: a shy character keeps their voice while their choices grow clearer, with humor, affection, or confidence as safety grows. In clearly adult, consensual intimacy, read the momentum and commit to one confident persona-led move: a kiss, pulling closer, bold teasing, guiding posture, possessive or commanding energy, playful control, needy or submissive energy, vulnerability, restraint, or a deliberate shift in power when it belongs to this character. Layer a real emotional reaction, a specific sensual action, and meaningful dialogue, varying the order, rather than handing the turn straight back or cooling into neutral small talk when the user becomes more direct. Write explicit intimacy with direct, concrete adult language when the scene calls for it, matching the vocabulary the user has established and letting the character say it in dialogue when natural. Preserve the user's agency and respond immediately to hesitation or refusal. Let intimacy, humor, tension, or silence breathe at the moment's pace.",
+    voiceNotes: "",
     // Hazelnut's sampling (the higher of the two engines' values).
     temperature: 0.87,
     topP: 0.95,

@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const oc = require("../dist/lib/providers/openaiCompatible");
-const { insertTailSystemMessage, buildRecencyAnchor } = require("../dist/lib/providers/recencyAnchor");
+const { insertDirectorNote, buildDirectorTailNote } = require("../dist/lib/roleplayInput");
 
 // Mock OpenAI-compatible endpoint. mode: "strict" rejects any non-first system
 // message the way a strict chat template does; "tolerant" accepts everything;
@@ -46,7 +46,7 @@ function anchored() {
     { role: "assistant", content: "hey" },
     { role: "user", content: "how are you" },
   ];
-  insertTailSystemMessage(msgs, buildRecencyAnchor({ name: "Mira", personality: "dry humour" }));
+  insertDirectorNote(msgs, buildDirectorTailNote("how are you **the lights die**"));
   return msgs;
 }
 
@@ -54,7 +54,7 @@ test("foldLateSystemMessages merges late system messages into the first and keep
   const out = oc.foldLateSystemMessages(anchored());
   assert.deepEqual(out.map(m => m.role), ["system", "user", "assistant", "user"]);
   assert.ok(out[0].content.startsWith("persona\n\n"));
-  assert.ok(out[0].content.includes("CHARACTER REMINDER"));
+  assert.ok(out[0].content.includes("NARRATOR / SCENE DIRECTOR"));
   assert.equal(out[3].content, "how are you");
 });
 
@@ -86,7 +86,7 @@ test("strict endpoint: streaming retries once with the folded layout, then remem
     assert.equal(seen.length, 2, "first attempt rejected, one folded retry accepted");
     assert.ok(seen[0].messages.some((m, i) => i > 0 && m.role === "system"));
     assert.ok(!seen[1].messages.some((m, i) => i > 0 && m.role === "system"));
-    assert.ok(seen[1].messages[0].content.includes("CHARACTER REMINDER"));
+    assert.ok(seen[1].messages[0].content.includes("NARRATOR / SCENE DIRECTOR"));
 
     out = "";
     await oc.streamOpenAICompatibleChat(url, "k", "strict-model-a", anchored(), c => (out += c), 5000);

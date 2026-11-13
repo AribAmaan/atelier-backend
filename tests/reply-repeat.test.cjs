@@ -4,7 +4,7 @@ const { streamCompleteReply } = require('../dist/lib/providers/completeReply');
 const { dropRepeatedSentences } = require('../dist/lib/providers/replyRepeat');
 const { depthContinuationSuffix } = require('../dist/lib/providers/completeReply');
 const { cleanAssistantResponse } = require('../dist/lib/providers');
-const { CONVERSATION_AWARENESS_RULES } = require('../dist/lib/conversationAwareness');
+const { LANGUAGE_RULE } = require('../dist/lib/conversationAwareness');
 
 // Shapes taken from a real chat where a top-up call restarted the reply.
 const first = "Fine, English. She looks up at you, lips already parted, voice dropping to a rough whisper. I'm not some girl you found at a bar. You're mine. Only mine.";
@@ -62,19 +62,16 @@ test('a normal depth top-up is untouched, with natural spacing', () => {
   assert.equal(depthContinuationSuffix('She waits by the door. ', 'Then she finally speaks, quietly.'), 'Then she finally speaks, quietly.');
 });
 
-test('the saved reply is cleaned against the earlier replies', () => {
-  const prior = ['Tum meri zimmedari ho, aur main tumhe kisi aur ke paas nahi jaane dungi.'];
-  const out = cleanAssistantResponse('Tum meri zimmedari ho, aur main tumhe kisi aur ke paas nahi jaane dungi. Ab baith jao aur batao kya hua.', 10, prior);
-  assert.equal(out, 'Ab baith jao aur batao kya hua.');
+test('the saved reply is only format-cleaned, never shortened or deduplicated', () => {
+  const prior = 'Tum meri zimmedari ho, aur main tumhe kisi aur ke paas nahi jaane dungi.';
+  const out = cleanAssistantResponse(`Mira: ${prior} Ab baith jao aur batao kya hua. *she smiles`, 'Mira');
+  assert.equal(out, `${prior} Ab baith jao aur batao kya hua. *she smiles*`);
 });
 
-test('prompt rules tell the character to follow the requested language and never loop', () => {
-  assert.match(CONVERSATION_AWARENESS_RULES, /LANGUAGE:.*switch immediately/s);
-  assert.match(CONVERSATION_AWARENESS_RULES, /NO LOOPS:/);
-  assert.match(CONVERSATION_AWARENESS_RULES, /REACTION:.*never from a habit.*Most turns are ordinary and need no exclamation.*Never add one as filler/s);
-  assert.doesNotMatch(CONVERSATION_AWARENESS_RULES, /REACTION SIZE|never open with a calm summary/);
-  assert.match(CONVERSATION_AWARENESS_RULES, /NO INVENTED HISTORY:.*family, past, or relationships/s);
-  assert.match(CONVERSATION_AWARENESS_RULES, /NATURAL TURN:.*Mirror the user's format.*never narrate what the user's body feels/s);
+test('the language rule is the only chat-level rule left', () => {
+  assert.match(LANGUAGE_RULE, /LANGUAGE:.*switch/s);
+  assert.match(LANGUAGE_RULE, /romanized Hindi\/Hinglish/);
+  assert.doesNotMatch(LANGUAGE_RULE, /NO LOOPS|REACTION|NATURAL TURN/);
 });
 
 function fakeStream(outputs) {
@@ -174,22 +171,4 @@ test('a first pass already at the floor still streams live (no hold)', async () 
   await streamCompleteReply(stream, [{ role: 'user', content: 'hi' }], c => emits.push(c), undefined,
     { minWords: 105, maxWords: 130, targetWords: 120, maxTokens: 256, continuationMaxTokens: 160 });
   assert.ok(emits.length > 1, 'long-enough replies keep streaming');
-});
-
-test('the length envelope is restated as a tail system message next to the final turn', () => {
-  const { planReply } = require('../dist/lib/providers/replyPolicy');
-  const { insertTailSystemMessage, LENGTH_MARKER } = require('../dist/lib/providers/recencyAnchor');
-  const plan = planReply(9, 'hi', '', { adaptiveRhythm: false });
-  assert.match(plan.lengthReminder, /105.130 words/);
-  assert.match(plan.lengthReminder, /about 120/);
-  const msgs = [{ role: 'system', content: 'persona' }, { role: 'assistant', content: 'old' }, { role: 'user', content: 'hi' }];
-  insertTailSystemMessage(msgs, plan.lengthReminder);
-  insertTailSystemMessage(msgs, plan.lengthReminder); // idempotent
-  assert.equal(msgs.length, 4);
-  assert.equal(msgs[2].role, 'system');
-  assert.ok(msgs[2].content.startsWith(LENGTH_MARKER));
-  assert.equal(msgs[3].content, 'hi');
-  // Strawberry and Balanced get their own numbers.
-  assert.match(planReply(6, 'hi').lengthReminder, /50.70 words/);
-  assert.match(planReply(5, 'hi').lengthReminder, /40.60 words/);
 });

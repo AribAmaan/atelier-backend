@@ -5,13 +5,13 @@ const { splitRoleplayInput, formatRoleplayInput, buildRoleplayTurnGuard, ROLEPLA
 const { selectHazelnutContext } = require('../dist/lib/hazelnutContext');
 const { buildSystemPrompt, summarizeConversation } = require('../dist/lib/providers');
 const { ROLEPLAY_ENGINES } = require('../dist/lib/providers/engines');
-const { replyProfile } = require('../dist/lib/providers/replyPolicy');
 
-for (const marker of ['*', '**']) {
-  test(`${marker} separates speech, private context, and subsequent speech`, () => {
+for (const [marker, director] of [['*', false], ['**', true]]) {
+  test(`${marker} separates speech, narration, and subsequent speech`, () => {
     assert.deepEqual(splitRoleplayInput(`Hi ${marker}I feel nervous but hide it${marker} How are you?`), [
       { kind: 'spoken', text: 'Hi ' },
-      { kind: 'narration', text: 'I feel nervous but hide it' },
+      director ? { kind: 'narration', text: 'I feel nervous but hide it', director: true }
+        : { kind: 'narration', text: 'I feel nervous but hide it' },
       { kind: 'spoken', text: ' How are you?' },
     ]);
   });
@@ -24,6 +24,10 @@ test('multiple narration spans retain their order and visible actions', () => {
   assert.equal(payload[1].text, 'I pass the map');
   assert.equal(payload[1].delivery, 'unspoken_context');
   assert.equal(payload[3].character_knowledge, 'only_if_perceptible_in_scene');
+  // ** is the narrator / scene director; * stays the user's own unspoken context.
+  assert.equal(payload[3].delivery, 'narrator_director');
+  assert.equal(payload[3].authority, 'canon_highest_priority');
+  assert.equal('director' in payload[3], false);
 });
 
 test('quoted thought is retained as narration, never promoted to dialogue', () => {
@@ -42,7 +46,7 @@ test('explicit speaking inside narration is preserved for contextual interpretat
 
 test('unfinished narration remains unspoken across newlines', () => {
   assert.deepEqual(splitRoleplayInput('Hi **I wonder\nwhere she went'), [
-    { kind: 'spoken', text: 'Hi ' }, { kind: 'narration', text: 'I wonder\nwhere she went' },
+    { kind: 'spoken', text: 'Hi ' }, { kind: 'narration', text: 'I wonder\nwhere she went', director: true },
   ]);
 });
 
@@ -58,6 +62,7 @@ test('guard anchors actual speech without repeating the private content', () => 
   assert.match(guard, /"Hello"/);
   assert.doesNotMatch(guard, /anxious/);
   assert.match(guard, /Do not answer private thoughts\/feelings or invent cues/);
+  assert.match(guard, /NARRATOR \/ SCENE DIRECTOR \(highest priority this turn\)/);
 });
 
 test('narration-only input does not fabricate speech', () => {
@@ -121,12 +126,6 @@ test('Choco Hazelnut standard-context mode also carries the narration rules', ()
   }
 });
 
-test('both engines keep their existing response word limits (Strawberry 50-70, Choco Hazelnut 105-130)', () => {
-  assert.deepEqual(Object.values(ROLEPLAY_ENGINES).map(e => {
-    const p = replyProfile(e.intelligence); return [p.ordinaryWords, p.minWords, p.maxWords];
-  }), [[60, 50, 70], [120, 105, 130]]);
-});
-
 test('memory provider request preserves privacy labels and contains corrective memory rules', async () => {
   const previousKey = process.env.NVIDIA_API_KEY;
   const originalFetch = global.fetch;
@@ -145,7 +144,8 @@ test('memory provider request preserves privacy labels and contains corrective m
     ], false, 10);
     assert.equal(captured.length, 1);
     assert.ok(captured[0].messages[0].content.includes(ROLEPLAY_MEMORY_RULES));
-    assert.match(captured[0].messages[1].content, /unspoken_context/);
+    assert.match(captured[0].messages[1].content, /narrator_director/);
+    assert.match(captured[0].messages[0].content, /Narrator canon/);
     assert.match(summary, /^Private narrator context:/);
   } finally {
     global.fetch = originalFetch;

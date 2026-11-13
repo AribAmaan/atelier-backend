@@ -124,14 +124,14 @@ export function selectHazelnutContext(options: {
   const candidates = older.flatMap((message, order) => {
     // Parse before excerpting so removing delimiters never turns a thought into speech.
     const segments = message.role === "user" ? splitRoleplayInput(message.content)
-      : [{ kind: undefined, text: message.content }];
+      : [{ kind: undefined, text: message.content, director: undefined }];
     let part = 0;
     return segments.flatMap(segment => {
       // Keep each segment whole: qualifiers, negation and conditionals may
       // govern later sentences in spoken dialogue as well as narration.
       const parts = [segment.text];
       return parts.map(content => ({
-        content: content.trim(), sourceId: message.id, role: message.role, kind: segment.kind, order, part: part++,
+        content: content.trim(), sourceId: message.id, role: message.role, kind: segment.director ? "director" : segment.kind, order, part: part++,
         score: relevance(content, terms) + (message.role === "user" && CONSTRAINT.test(content) ? 9 :
           message.role === "assistant" && COMMITMENT.test(content) ? 6 : 0),
       }));
