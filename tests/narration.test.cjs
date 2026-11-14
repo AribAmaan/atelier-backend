@@ -6,12 +6,11 @@ const { selectHazelnutContext } = require('../dist/lib/hazelnutContext');
 const { buildSystemPrompt, summarizeConversation } = require('../dist/lib/providers');
 const { ROLEPLAY_ENGINES } = require('../dist/lib/providers/engines');
 
-for (const [marker, director] of [['*', false], ['**', true]]) {
+for (const [marker, director] of [['*', true], ['**', true]]) {
   test(`${marker} separates speech, narration, and subsequent speech`, () => {
     assert.deepEqual(splitRoleplayInput(`Hi ${marker}I feel nervous but hide it${marker} How are you?`), [
       { kind: 'spoken', text: 'Hi ' },
-      director ? { kind: 'narration', text: 'I feel nervous but hide it', director: true }
-        : { kind: 'narration', text: 'I feel nervous but hide it' },
+      { kind: 'narration', text: 'I feel nervous but hide it', director: true },
       { kind: 'spoken', text: ' How are you?' },
     ]);
   });
@@ -22,7 +21,7 @@ test('multiple narration spans retain their order and visible actions', () => {
   const payload = JSON.parse(formatRoleplayInput(input).slice('ROLEPLAY_INPUT '.length));
   assert.deepEqual(payload.map(s => s.kind), ['spoken', 'narration', 'spoken', 'narration']);
   assert.equal(payload[1].text, 'I pass the map');
-  assert.equal(payload[1].delivery, 'unspoken_context');
+  assert.equal(payload[1].delivery, 'narrator_director');
   assert.equal(payload[3].character_knowledge, 'only_if_perceptible_in_scene');
   // ** is the narrator / scene director; * stays the user's own unspoken context.
   assert.equal(payload[3].delivery, 'narrator_director');
@@ -73,7 +72,7 @@ test('narration-only input does not fabricate speech', () => {
 test('speech anchor is bounded, escaped as JSON, and full original text is retained', () => {
   const text = 'hello "friend"\n' + 'x'.repeat(4000) + ' *I think quietly*';
   const guard = buildRoleplayTurnGuard(text);
-  assert.ok(guard.length < 1400);
+  assert.ok(guard.length < 1900);
   assert.match(guard, /\\"friend\\"\\n/);
   const payload = JSON.parse(formatRoleplayInput(text).slice('ROLEPLAY_INPUT '.length));
   assert.equal(payload[0].text.length, text.indexOf('*'));
@@ -90,7 +89,7 @@ test('Hazelnut recalls a complete private thought without losing its qualifier',
     targetTokens: 2000, recalled: [{ id: 'old', role: 'user', content: `*${narration}*` }] });
   const data = JSON.parse(result.memory.slice(result.memory.indexOf('\n[') + 1));
   assert.equal(data.length, 1);
-  assert.equal(data[0].kind, 'narration');
+  assert.equal(data[0].kind, 'director');
   assert.equal(data[0].quote, narration);
   assert.deepEqual(result.selectedIds, ['u1', 'a1', 'u2']);
 });
@@ -109,7 +108,7 @@ for (const engine of Object.values(ROLEPLAY_ENGINES)) {
     const prompt = buildSystemPrompt(character, { explicitMode: false, engine });
     assert.ok(prompt.includes(ROLEPLAY_INPUT_RULES));
     assert.ok(prompt.includes('ROLEPLAY_INPUT'));
-    assert.ok(prompt.includes('unspoken_context'));
+    assert.ok(prompt.includes('narrator_director'));
   });
 }
 

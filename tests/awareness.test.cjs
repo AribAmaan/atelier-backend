@@ -140,7 +140,7 @@ test('every tier sends causal, attributed memory rules to the summary provider',
     assert.equal(captured.length, Object.keys(ROLEPLAY_ENGINES).length);
     for (const request of captured) {
       assert.ok(request.messages[0].content.includes(CONTINUITY_MEMORY_RULES));
-      assert.match(request.messages[1].content, /unspoken_context/);
+      assert.match(request.messages[1].content, /narrator_director/);
       assert.match(request.messages[1].content, /Why did you hide it/);
     }
   } finally {

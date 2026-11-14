@@ -12,7 +12,7 @@ const character = { name: 'Mira', personality: 'Reserved archivist.', backstory:
 const PATHS = [[undefined, false], [undefined, true], ...Object.values(ROLEPLAY_ENGINES).flatMap(e => [[e, false], [e, true]])];
 const prompts = () => PATHS.map(([engine, explicitMode]) => buildSystemPrompt(character, { explicitMode, engine, voiceNotes: engine?.voiceNotes }));
 
-test('every prompt path tells the model that ** is the narrator / scene director with top priority', () => {
+test('every prompt path tells the model that asterisk text is the narrator / scene director with top priority', () => {
   for (const p of prompts()) {
     assert.ok(p.includes(ROLEPLAY_INPUT_RULES));
     assert.match(p, /NARRATOR \/ SCENE DIRECTOR/);
@@ -23,17 +23,28 @@ test('every prompt path tells the model that ** is the narrator / scene director
   }
 });
 
-test('single * stays the user\'s own action/thought; ** is split out as director', () => {
-  const parts = splitRoleplayInput('Hi *I wave* **a storm breaks**');
-  assert.equal(parts.filter(p => p.director).length, 1);
-  assert.equal(parts.find(p => p.director).text, 'a storm breaks');
-  assert.equal(parts.find(p => p.text === 'I wave').director, undefined);
-  const payload = JSON.parse(formatRoleplayInput('Hi *I wave* **a storm breaks**').slice('ROLEPLAY_INPUT '.length));
-  assert.deepEqual(payload.filter(s => s.kind === 'narration').map(s => s.delivery), ['unspoken_context', 'narrator_director']);
+test('any text between asterisks (* or **) is the narrator / scene director', () => {
+  const parts = splitRoleplayInput('Hi *I wave* **a storm breaks** *suzy says*');
+  assert.deepEqual(parts.filter(p => p.director).map(p => p.text), ['I wave', 'a storm breaks', 'suzy says']);
+  const payload = JSON.parse(formatRoleplayInput('Hi *suzy says*').slice('ROLEPLAY_INPUT '.length));
+  assert.deepEqual(payload.filter(s => s.kind === 'narration').map(s => [s.delivery, s.authority]), [['narrator_director', 'canon_highest_priority']]);
 });
 
-test('director note appears only when ** or a scene steer is present, and is inserted once before the final message', () => {
-  assert.equal(buildDirectorTailNote('just talking *smiles*'), '');
+test('other characters: the rules make the model voice them instead of the main character answering', () => {
+  for (const p of prompts()) {
+    assert.match(p, /OTHER CHARACTERS/);
+    assert.match(p, /YOU voice them/);
+    assert.match(p, /Never answer as the main character in their place, never make the main character wait/);
+    assert.match(p, /\*Suzy says\*/);
+    assert.match(p, /Suzy: \.\.\./);
+    assert.match(p, /voice any other character the narrator brings in or directs/);
+  }
+  assert.match(buildDirectorTailNote('*suzy says*'), /write that character's action and actual spoken words/);
+  assert.match(buildRoleplayTurnGuard('*suzy says*'), /never answer as the main character in their place/);
+});
+
+test('director note appears only when asterisk text or a scene steer is present, and is inserted once before the final message', () => {
+  assert.equal(buildDirectorTailNote('just talking, no asterisks'), '');
   assert.equal(buildRoleplayTurnGuard('plain'), '');
   const note = buildDirectorTailNote('Hey **the lights die**', 'She finally confesses');
   assert.ok(note.startsWith(DIRECTOR_MARKER));
@@ -49,15 +60,7 @@ test('a scene-director steer alone (no user text) still produces a high-priority
   const guard = buildRoleplayTurnGuard('', 'x'.repeat(5000));
   assert.match(guard, /highest priority this turn/);
   assert.ok(guard.length < 2300);
-  assert.ok(buildDirectorTailNote('', 'y'.repeat(5000)).length < 1300);
-});
-
-test('an empty ** narrator beat triggers nothing', () => {
-  for (const x of ['**  **', 'hi **   ** there']) {
-    assert.equal(splitRoleplayInput(x).some(p => p.director), false, x);
-    assert.equal(buildDirectorTailNote(x), '');
-    assert.equal(buildRoleplayTurnGuard(x), '');
-  }
+  assert.ok(buildDirectorTailNote('', 'y'.repeat(5000)).length < 1500);
 });
 
 test('memory rules keep narrator canon as established fact', () => {

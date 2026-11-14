@@ -444,7 +444,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   genParams.continuationMaxTokens = replyPlan.continuationMaxTokens;
   genParams.preserveStreamedLength = false;
   // The narrator / scene director is the one per-turn instruction: it comes from
-  // **double asterisks** in the user's latest turn and from the quick-action steer.
+  // text between asterisks in the user's latest turn and from the quick-action steer.
   // It is rebuilt on every request (never cached) and placed last, next to the
   // final message, where it is read with the most weight.
   const directorInput = lastIsUserTurn ? latestUserText : "";

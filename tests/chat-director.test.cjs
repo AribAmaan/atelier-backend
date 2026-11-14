@@ -50,7 +50,7 @@ test('chat route: narrator / scene director delivery and no shaping prompts', as
       history = [make('user', 'Where is the map?'), make('assistant', 'Shall I check the archive?')];
       const c = await request({ engineId: 'choco_hazelnut', message: 'Hey **the lights die and someone knocks**' });
       const sys = c.messages[0].content;
-      assert.match(sys, /\*\*Double asterisks\*\* are the NARRATOR \/ SCENE DIRECTOR/);
+      assert.match(sys, /Text between asterisks \(\*like this\* or \*\*like this\*\*\) is the NARRATOR \/ SCENE DIRECTOR/);
       assert.match(sys, /CURRENT USER TURN — PERCEPTION CHECK/);
       assert.match(sys, /NARRATOR \/ SCENE DIRECTOR \(highest priority this turn\): apply every narrator_director segment/);
       assert.match(c.messages.at(-1).content, /"delivery":"narrator_director".*"authority":"canon_highest_priority"/);
@@ -59,6 +59,16 @@ test('chat route: narrator / scene director delivery and no shaping prompts', as
       assert.match(c.messages.at(-2).content, TAIL);
       assert.equal(systems(c).filter(m => TAIL.test(m.content)).length, 1);
       assert.equal(history.find(m => m.content.startsWith('Hey **')).content, 'Hey **the lights die and someone knocks**', 'stored raw, not wrapped');
+    });
+    await t.test('single * scene direction ("*Suzy says*") reaches the model as director and tells it to voice Suzy', async () => {
+      history = [make('user', 'suzy my aunt abigails lil sis enters the room'), make('assistant', 'Hey, Suzy.')];
+      const c = await request({ engineId: 'choco_hazelnut', message: '*suzy says*' });
+      assert.match(c.messages.at(-1).content, /"text":"suzy says","delivery":"narrator_director"/);
+      assert.match(c.messages.at(-2).content, TAIL);
+      assert.match(c.messages.at(-2).content, /another character .*write that character's action and actual spoken words/s);
+      assert.match(c.messages[0].content, /OTHER CHARACTERS/);
+      assert.match(c.messages[0].content, /A direction with no wording \("\*Suzy says\*"\) means: decide what Suzy says and write it/);
+      assert.match(c.messages[0].content, /voice any other character the narrator brings in or directs/);
     });
     await t.test('no limits requested or enforced, and no shaping prompts', async () => {
       for (const [engineId, tokens] of [['strawberry', 700], ['choco_hazelnut', 1000]]) {
@@ -96,14 +106,14 @@ test('chat route: narrator / scene director delivery and no shaping prompts', as
       const note = systems(c).filter(m => TAIL.test(m.content));
       assert.equal(note.length, 1);
       assert.match(note[0].content, /Scene-director steer for this reply: "Continue"/);
-      assert.doesNotMatch(note[0].content, /double-asterisk/);
+      assert.doesNotMatch(note[0].content, /asterisk parts/);
     });
     await t.test('regenerate drops the last reply and re-applies the ** of the user turn it answers', async () => {
       history = [make('user', 'Hey **a knock at the door**'), make('assistant', 'Discard this old answer.')];
       const c = await request({ engineId: 'strawberry', regenerate: true });
       assert.doesNotMatch(JSON.stringify(c.messages), /Discard this old answer/);
       assert.match(c.messages.at(-2).content, TAIL);
-      assert.match(c.messages.at(-2).content, /double-asterisk/);
+      assert.match(c.messages.at(-2).content, /asterisk parts/);
     });
     await t.test('mature mode keeps adult-only + consent and asks for explicit writing', async () => {
       explicit = true; history = [];

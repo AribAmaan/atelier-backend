@@ -87,7 +87,7 @@ test('chat route delivers awareness through engine switches, continuation, regen
         const result = await request({ engineId, message: 'Yes *I secretly hope it is there*' });
         assert.ok(result.messages[0].content.includes(LANGUAGE_RULE));
         assert.match(result.messages[0].content, /CURRENT USER TURN/);
-        assert.match(result.messages.at(-1).content, /unspoken_context/);
+        assert.match(result.messages.at(-1).content, /narrator_director/);
         // No persona anchor / length reminder any more; the conversation is in order.
         const convo = result.messages.slice(1).filter(m => m.role !== 'system');
         assert.equal(convo.at(-1).role, 'user');

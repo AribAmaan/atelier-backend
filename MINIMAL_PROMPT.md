@@ -11,9 +11,10 @@ Craft rules, `ROLEPLAY_FORMAT`, awareness rules (natural turn, reaction, no loop
 - One language line (Hinglish stays romanized Hinglish) and one format line (*actions*, plain dialogue) so the UI keeps rendering. Delete either in `conversationAwareness.ts` / `providers/index.ts` if you want zero.
 - Token ceiling as a runaway guard only: 700 (free) / 1000 (plus), env `REPLY_MAX_TOKENS_FREE` / `REPLY_MAX_TOKENS_PLUS`. Finish-on-cutoff recovery still works.
 
-## Strengthened: `**double asterisks**` = Narrator / Scene Director
+## Strengthened: text between asterisks (`*x*` or `**x**`) = Narrator / Scene Director
 - Highest priority in the turn, above persona, history and memory. Canon the moment it is written (events, time/place jumps, new people/objects, character states); directions to the character are acted out; never refused or commented on.
-- Private thoughts/opinions inside `**` stay unheard by the character; `*single*` stays the user's own action/thought.
+- Both `*x*` and `**x**` are the narrator (the app renders both the same). Private thoughts/opinions inside stay unheard by the character.
+- Other characters: `*Suzy enters*` / `*Suzy says*` makes the model voice Suzy (`Suzy: ...`) instead of the main character answering in her place.
 - Director authority covers the story only, not system rules or adult-only/consent limits.
 - Delivered three times: rules in the system prompt, `delivery: "narrator_director"` on the segment in the user's own message, and a tail system note right before the final message. The quick-action `sceneDirective` uses the same channel (limit raised 500 -> 1000 chars, no longer baked into the cached system prompt).
 - Memory summaries keep narrator canon as facts (`Narrator canon` label).
