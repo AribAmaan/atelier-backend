@@ -115,10 +115,6 @@ services:
         value: "false"
 
       # ---- Roleplay experiments (see ROLEPLAY_REDESIGN.md) ------------------
-      # NOTE (MINIMAL_PROMPT.md): ADAPTIVE_REPLY_RHYTHM, ROLEPLAY_DIRECTOR, ROLEPLAY_ACTION_CAP,
-      # ROLEPLAY_PERSONA_ANCHOR and ROLEPLAY_ANCHOR_PLACEMENT no longer change any prompt: the
-      # chat-shaping prompts they controlled were removed. Only telemetry still reads them.
-      # Optional: REPLY_MAX_TOKENS_FREE (default 700) / REPLY_MAX_TOKENS_PLUS (default 1000).
       # Each flag takes on | off | split:N (N% of users, chosen by a stable hash
       # of the user id, so a user stays in one arm for the whole test).
       #
