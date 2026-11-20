@@ -5,6 +5,11 @@
 // History: +75 estimated tokens (about 45 real) for the envelope's explicit word-floor sentence and the PROPORTION
 // clarification. It buys the removal of a conflict that sent most short opening replies through a second full-prompt
 // call (about 3.4k real input tokens each); it pays for itself if it avoids one top-up in roughly 70.
+// History: about +460 estimated tokens (about +290 real, ~12%) for the narrator / scene-director channel: the director
+// rules (canon, cast voicing, agency, scope) in ROLEPLAY_INPUT_RULES, a clause in the craft FRAME line, and the
+// director wording in the system-prompt persona line. The v19 perception rules and examples are kept verbatim, so
+// this is purely additive. It buys: *...* / **...** beats treated as canon, side characters (*Suzy says*) actually
+// voiced instead of the main persona answering for them, and no refusal or commentary on narrator beats.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildSystemPrompt } = require('../dist/lib/providers');
@@ -16,8 +21,8 @@ const { estimateTokens } = require('../dist/lib/hazelnutContext');
 
 const character = { name: 'Mira', personality: 'Reserved archivist who hides warmth behind dry humor.', backstory: 'Keeps the records of a coastal town.', greeting: 'The reading room is closed.', tagline: 'Archivist' };
 const BUDGETS = [
-  ['strawberry', false, true, 3800], ['strawberry', true, true, 4450],
-  ['choco_hazelnut', false, true, 3950], ['choco_hazelnut', true, true, 4725], ['choco_hazelnut', true, false, 5075],
+  ['strawberry', false, true, 4250], ['strawberry', true, true, 4850],
+  ['choco_hazelnut', false, true, 4450], ['choco_hazelnut', true, true, 5175], ['choco_hazelnut', true, false, 5475],
 ];
 for (const [engineId, explicit, compact, budget] of BUDGETS) {
   test(`fixed prompt stays within ${budget} estimated tokens: ${engineId} ${explicit ? 'mature' : 'sfw'} ${compact ? 'compact' : 'standard'}`, () => {

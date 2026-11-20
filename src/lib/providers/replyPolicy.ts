@@ -1,14 +1,57 @@
+import { classifyUserBeat, type UserBeat } from "./turnDirector";
+import { flagEnabled } from "../roleplayFlags";
+import { LENGTH_MARKER } from "./recencyAnchor";
 
-function envTokens(name: string, def: number): number {
-  const n = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isFinite(n) && n >= 64 ? Math.min(n, 4096) : def;
-}
-
-/** Per-tier generation ceiling only; see planReply. Strawberry/manual = free tier, Choco Hazelnut = plus. */
+/**
+ * Reply length and quality are engine properties first and user-message
+ * properties only at the margin. The tier's CEILING, token budget and quality
+ * never move: a greeting, long narration, an action-only turn, or a request to
+ * be "short"/"detailed" cannot inflate or downgrade the selected tier.
+ *
+ * One experiment arm (ADAPTIVE_REPLY_RHYTHM, OFF by default; "on" or
+ * "split:N" enables it, see roleplayFlags.ts): when the user's turn is a brief
+ * beat of a few words, the tier's word FLOOR and aim relax to ~60% / ~80% so a
+ * "hi" is not padded to a full paragraph. It is off by default because the
+ * only real-user retention study found longer replies retain better, so
+ * shortening a reply is a hypothesis to measure, not a default. Weighty and
+ * ordinary turns always keep the full tier envelope.
+ */
 export function replyProfile(intelligence: number) {
-  if (intelligence <= 7) return { name: intelligence <= 5 ? "Balanced" : "Strawberry", tokens: envTokens("REPLY_MAX_TOKENS_FREE", 700) };
-  return { name: "Choco Hazelnut", tokens: envTokens("REPLY_MAX_TOKENS_PLUS", 1000) };
+  // Manual (no engine selected) mode runs at intelligence 5.
+  if (intelligence <= 5) return {
+    name: "Balanced",
+    purpose: "natural conversation",
+    ordinaryWords: 50,
+    minWords: 40,
+    maxWords: 60,
+    tokens: 144,
+    detailedTokens: 144,
+  };
+  // Strawberry (free engine).
+  if (intelligence <= 7) return {
+    name: "Strawberry",
+    purpose: "attentive conversation with a relevant reaction",
+    ordinaryWords: 60,
+    minWords: 50,
+    maxWords: 70,
+    // 104 tokens was too close to the 70-word ceiling for punctuation-heavy
+    // roleplay text and could end with finish_reason=length mid-sentence.
+    tokens: 144,
+    detailedTokens: 144,
+  };
+  // Choco Hazelnut (premium engine). Keeps Hazelnut's envelope, the larger of
+  // the two engines it combines, so Chocolate's depth is not narrowed.
+  return {
+    name: "Choco Hazelnut",
+    purpose: "grounded scene presence, emotional follow-through, precise character voice, subtext, continuity, and confident initiative",
+    ordinaryWords: 120,
+    minWords: 105,
+    maxWords: 130,
+    tokens: 256,
+    detailedTokens: 256,
+  };
 }
+
 
 /** Sentence boundaries shared by streaming and final word-cap reconciliation. */
 export function replySentenceEnds(text: string, final = false): number[] {
@@ -83,16 +126,61 @@ export function clampReplyToWordCeiling(text: string, maxWords: number, minWords
   return (/[.!?。！？।॥][\"'”’)*_\]]*$/.test(clipped) ? clipped : clipped + '.') + closed;
 }
 
+/** Rapid-beat relaxation. Exposed for tests and the guidance text. */
+const RAPID_FLOOR = 0.6;
+const RAPID_AIM = 0.8;
+
+/** The no-user control value of the adaptive-rhythm flag (default off; see roleplayFlags.ts). */
+export function adaptiveRhythmEnabled(): boolean {
+  return flagEnabled("adaptiveRhythm");
+}
+
+export function buildReplyGuidance(intelligence: number, beat: UserBeat = "normal", adaptive: boolean = adaptiveRhythmEnabled()): string {
+  const p = replyProfile(intelligence);
+  const rapid = beat === "rapid" && adaptive;
+  const aim = rapid ? Math.round(p.ordinaryWords * RAPID_AIM) : p.ordinaryWords;
+  const floor = rapid ? Math.max(20, Math.round(p.minWords * RAPID_FLOOR)) : p.minWords;
+  const size = rapid
+    ? `The user's turn is brief. If it is light (a greeting, an acknowledgement, banter), a compact reply of about ${aim} words (${floor}\u2013${p.maxWords}) is natural; if it carries feeling, news or a decision, use the fuller ${p.minWords}\u2013${p.maxWords}.`
+    : `Aim for around ${aim} words, normally ${floor}\u2013${p.maxWords} words. Even a greeting or a one-line message gets at least ${floor} words: use the room for one concrete action or detail and a move of the character's own, never filler.`;
+  return `TIER-LOCKED REPLY ENVELOPE \u2014 ${p.name}: ${p.purpose}. ${size} ${p.maxWords} is the hard ceiling and it does not change with the length or format of the user's message. The engine's quality does not drop for a brief, long, narration-only or action-only turn. Develop one coherent character beat to this tier's depth. Every sentence must contribute: a relevant response, choice, consequence, or useful detail. Do not pad with repeated emotions, gestures, recaps, or automatic questions. Start wrapping up before the ceiling; finish the current sentence instead of opening a new thread. Do not imitate earlier reply lengths.`;
+}
+
 /**
- * Server-side generation budget. No length is requested from the model and no
- * word ceiling or floor is enforced: the model decides how long a reply should
- * be. The token ceiling is only a runaway guard (and a cost control), sized so
- * a normal reply never reaches it. Override with REPLY_MAX_TOKENS_FREE /
- * REPLY_MAX_TOKENS_PLUS.
+ * One short line placed as its own system message right before the final
+ * message. The full envelope lives at the top of the system prompt, which is
+ * the part of the context a model attends to least when it writes; on a short
+ * user turn ("hi") the recent history wins and the first pass stops far below
+ * the floor. Restating the numbers at the point of generation makes the FIRST
+ * pass land in range, so the silent same-provider top-up is a rare safety net
+ * rather than the normal path.
  */
-export function planReply() {
+export function buildLengthReminder(minWords: number, targetWords: number, maxWords: number): string {
+  return `${LENGTH_MARKER} (apply silently): write ${minWords}\u2013${maxWords} words, aiming for about ${targetWords}, even if the user's message is a greeting or one line. Do not stop short of ${minWords}; finish your last sentence before ${maxWords}.`;
+}
+
+/**
+ * Ceiling and token budget are input-invariant. Only the floor/aim relax, and
+ * only for a quick user beat (see the header comment). A scene steer from the
+ * quick-action chips always gets the normal envelope.
+ */
+export function planReply(intelligence: number, latestUserText: string, sceneDirective = "", opts: { adaptiveRhythm?: boolean } = {}) {
+  const p = replyProfile(intelligence);
+  const beat: UserBeat = sceneDirective.trim() ? "normal" : classifyUserBeat(latestUserText);
+  const adaptive = opts.adaptiveRhythm ?? adaptiveRhythmEnabled();
+  const rapid = beat === "rapid" && adaptive;
+  const minWords = rapid ? Math.max(20, Math.round(p.minWords * RAPID_FLOOR)) : p.minWords;
   return {
-    mode: "open" as const,
-    continuationMaxTokens: 400,
+    mode: "tier" as const,
+    beat,
+    maxTokens: p.tokens,
+    continuationMaxTokens: p.name === "Strawberry" ? 128 : 160,
+    // Sentence-aware streaming uses the same boundaries as the final cap.
+    preserveStreamedLength: false,
+    targetWords: rapid ? Math.max(minWords, Math.round(p.ordinaryWords * RAPID_AIM)) : p.ordinaryWords,
+    minWords,
+    maxWords: p.maxWords,
+    instruction: buildReplyGuidance(intelligence, beat, adaptive),
+    lengthReminder: buildLengthReminder(minWords, rapid ? Math.max(minWords, Math.round(p.ordinaryWords * RAPID_AIM)) : p.ordinaryWords, p.maxWords),
   };
 }

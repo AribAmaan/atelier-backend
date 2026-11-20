@@ -61,31 +61,31 @@ test('chat route resolves engines by tier (paywall on) and honors retired engine
     const body = await response.text();
     assert.equal(response.status, 200, body);
     const events = [...body.matchAll(/\u0000EVT:(.*?)\u0000/g)].map(m => JSON.parse(m[1]));
-    return { maxTokens: captured.params.maxTokens, temperature: captured.params.temperature, events };
+    return { maxWords: captured.params.maxWords, temperature: captured.params.temperature, events };
   };
   try {
     // Free: Strawberry runs; asking for the premium engine falls back with an upsell event.
     let r = await send('free', 'strawberry');
-    assert.deepEqual([r.maxTokens, r.temperature], [700, 0.79]);
+    assert.deepEqual([r.maxWords, r.temperature], [70, 0.79]);
     assert.equal(r.events.some(e => e.type === 'engine_downgrade'), false);
     r = await send('free', 'hazelnut');
-    assert.deepEqual([r.maxTokens, r.temperature], [700, 0.79]);
+    assert.deepEqual([r.maxWords, r.temperature], [70, 0.79]);
     assert.deepEqual(r.events.find(e => e.type === 'engine_downgrade'),
       { type: 'engine_downgrade', requested: 'choco_hazelnut', used: 'strawberry', requiredTier: 'plus' });
     // Plus and legacy paid accounts get Choco Hazelnut, no downgrade event.
     for (const paid of ['plus', 'ultra', 'supreme']) {
       for (const id of ['choco_hazelnut', 'chocolate', 'hazelnut']) {
         r = await send(paid, id);
-        assert.deepEqual([r.maxTokens, r.temperature], [1000, 0.87], `${paid}/${id}`);
+        assert.deepEqual([r.maxWords, r.temperature], [130, 0.87], `${paid}/${id}`);
         assert.equal(r.events.some(e => e.type === 'engine_downgrade'), false, `${paid}/${id}`);
       }
     }
     // Retired free id still lands on Strawberry.
     r = await send('free', 'vanilla');
-    assert.deepEqual([r.maxTokens, r.temperature], [700, 0.79]);
+    assert.deepEqual([r.maxWords, r.temperature], [70, 0.79]);
     // An unknown tier value is treated as free.
     r = await send('gold', 'choco_hazelnut');
-    assert.equal(r.maxTokens, 700);
+    assert.equal(r.maxWords, 70);
   } finally {
     if (previousPaywall === undefined) delete process.env.ENFORCE_ENGINE_TIERS; else process.env.ENFORCE_ENGINE_TIERS = previousPaywall;
     server.closeAllConnections();

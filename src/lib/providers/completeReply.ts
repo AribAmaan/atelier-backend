@@ -115,7 +115,7 @@ export async function streamCompleteReply(stream: Stream, messages: Message[], o
   // back so the client only ever sees the finished reply, never a short one
   // that pauses and then grows.
   const topUpExpected = reason === "stop" && minWords > 0 && countWords(text) < minWords && text.trim() !== "" && !signal?.aborted;
-  const lengthRecoveryExpected = reason === "length" && text.trim() !== "" && !signal?.aborted && (maxWords <= 0 || countWords(text) < maxWords);
+  const lengthRecoveryExpected = reason === "length" && text.trim() !== "" && !signal?.aborted && countWords(text) < maxWords;
   if (!(holdForMinimum && !released && (topUpExpected || lengthRecoveryExpected))) flushDeferred();
   if (text.trim() && (topUpExpected || lengthRecoveryExpected)) {
     console.log(`[reply] first pass ${countWords(text)} words (finish=${reason}, floor=${minWords}, ceiling=${maxWords}) -> ${lengthRecoveryExpected ? "cutoff recovery" : "depth top-up"}${holdForMinimum && !released ? ", held until complete" : ""}`);

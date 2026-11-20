@@ -160,7 +160,8 @@ test('Continue / regenerate keep the character as the final speaker with the anc
   const { captured } = await run({ engineId: 'choco_hazelnut', priorAssistant: tired, userMessage: undefined, sceneDirective: 'Continue' });
   const { messages } = captured;
   assert.equal(messages.at(-1).role, 'assistant');
-  assert.equal(anchorAt(messages), messages.length - 2);
+  assert.equal(anchorAt(messages), messages.length - 3);
+  assert.ok(messages.at(-2).content.startsWith('NARRATOR / SCENE DIRECTOR'));
 });
 
 test('control arm (ROLEPLAY_PERSONA_ANCHOR=off): compact path has no anchor; standard path keeps the old top-of-prompt reminder', async () => {

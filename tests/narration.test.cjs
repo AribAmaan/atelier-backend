@@ -5,9 +5,10 @@ const { splitRoleplayInput, formatRoleplayInput, buildRoleplayTurnGuard, ROLEPLA
 const { selectHazelnutContext } = require('../dist/lib/hazelnutContext');
 const { buildSystemPrompt, summarizeConversation } = require('../dist/lib/providers');
 const { ROLEPLAY_ENGINES } = require('../dist/lib/providers/engines');
+const { replyProfile } = require('../dist/lib/providers/replyPolicy');
 
-for (const [marker, director] of [['*', true], ['**', true]]) {
-  test(`${marker} separates speech, narration, and subsequent speech`, () => {
+for (const marker of ['*', '**']) {
+  test(`${marker} separates speech, private context, and subsequent speech`, () => {
     assert.deepEqual(splitRoleplayInput(`Hi ${marker}I feel nervous but hide it${marker} How are you?`), [
       { kind: 'spoken', text: 'Hi ' },
       { kind: 'narration', text: 'I feel nervous but hide it', director: true },
@@ -22,11 +23,8 @@ test('multiple narration spans retain their order and visible actions', () => {
   assert.deepEqual(payload.map(s => s.kind), ['spoken', 'narration', 'spoken', 'narration']);
   assert.equal(payload[1].text, 'I pass the map');
   assert.equal(payload[1].delivery, 'narrator_director');
+  assert.equal(payload[1].authority, 'canon_highest_priority');
   assert.equal(payload[3].character_knowledge, 'only_if_perceptible_in_scene');
-  // ** is the narrator / scene director; * stays the user's own unspoken context.
-  assert.equal(payload[3].delivery, 'narrator_director');
-  assert.equal(payload[3].authority, 'canon_highest_priority');
-  assert.equal('director' in payload[3], false);
 });
 
 test('quoted thought is retained as narration, never promoted to dialogue', () => {
@@ -40,7 +38,7 @@ test('explicit speaking inside narration is preserved for contextual interpretat
   const parsed = splitRoleplayInput('*I say aloud, "The train is here."*');
   assert.equal(parsed[0].kind, 'narration');
   assert.match(formatRoleplayInput('*I say aloud, "The train is here."*'), /say aloud/);
-  assert.match(buildRoleplayTurnGuard('*I say aloud, "The train is here."*'), /explicit act of speaking/);
+  assert.match(ROLEPLAY_INPUT_RULES, /explicitly spoken aloud in the current scene/);
 });
 
 test('unfinished narration remains unspoken across newlines', () => {
@@ -60,8 +58,7 @@ test('guard anchors actual speech without repeating the private content', () => 
   const guard = buildRoleplayTurnGuard('Hello **I did not realize how anxious I was**');
   assert.match(guard, /"Hello"/);
   assert.doesNotMatch(guard, /anxious/);
-  assert.match(guard, /Do not answer private thoughts\/feelings or invent cues/);
-  assert.match(guard, /NARRATOR \/ SCENE DIRECTOR \(highest priority this turn\)/);
+  assert.match(guard, /story canon does not reveal private thoughts/);
 });
 
 test('narration-only input does not fabricate speech', () => {
@@ -72,7 +69,7 @@ test('narration-only input does not fabricate speech', () => {
 test('speech anchor is bounded, escaped as JSON, and full original text is retained', () => {
   const text = 'hello "friend"\n' + 'x'.repeat(4000) + ' *I think quietly*';
   const guard = buildRoleplayTurnGuard(text);
-  assert.ok(guard.length < 1900);
+  assert.ok(guard.length < 1400);
   assert.match(guard, /\\"friend\\"\\n/);
   const payload = JSON.parse(formatRoleplayInput(text).slice('ROLEPLAY_INPUT '.length));
   assert.equal(payload[0].text.length, text.indexOf('*'));
@@ -89,8 +86,11 @@ test('Hazelnut recalls a complete private thought without losing its qualifier',
     targetTokens: 2000, recalled: [{ id: 'old', role: 'user', content: `*${narration}*` }] });
   const data = JSON.parse(result.memory.slice(result.memory.indexOf('\n[') + 1));
   assert.equal(data.length, 1);
-  assert.equal(data[0].kind, 'director');
+  assert.equal(data[0].kind, 'narration');
   assert.equal(data[0].quote, narration);
+  assert.equal(data[0].delivery, 'narrator_director');
+  assert.equal(data[0].authority, 'canon_highest_priority');
+  assert.equal(data[0].character_knowledge, 'only_if_perceptible_in_scene');
   assert.deepEqual(result.selectedIds, ['u1', 'a1', 'u2']);
 });
 
@@ -125,6 +125,12 @@ test('Choco Hazelnut standard-context mode also carries the narration rules', ()
   }
 });
 
+test('both engines keep their existing response word limits (Strawberry 50-70, Choco Hazelnut 105-130)', () => {
+  assert.deepEqual(Object.values(ROLEPLAY_ENGINES).map(e => {
+    const p = replyProfile(e.intelligence); return [p.ordinaryWords, p.minWords, p.maxWords];
+  }), [[60, 50, 70], [120, 105, 130]]);
+});
+
 test('memory provider request preserves privacy labels and contains corrective memory rules', async () => {
   const previousKey = process.env.NVIDIA_API_KEY;
   const originalFetch = global.fetch;
@@ -144,7 +150,6 @@ test('memory provider request preserves privacy labels and contains corrective m
     assert.equal(captured.length, 1);
     assert.ok(captured[0].messages[0].content.includes(ROLEPLAY_MEMORY_RULES));
     assert.match(captured[0].messages[1].content, /narrator_director/);
-    assert.match(captured[0].messages[0].content, /Narrator canon/);
     assert.match(summary, /^Private narrator context:/);
   } finally {
     global.fetch = originalFetch;

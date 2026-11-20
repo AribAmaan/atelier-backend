@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildRecallQuery, selectHazelnutContext } = require('../dist/lib/hazelnutContext');
-const { buildCharacterSetup, LANGUAGE_RULE,
+const { buildAwarenessTurnGuard, buildCharacterSetup, CONVERSATION_AWARENESS_RULES,
   CONTINUITY_MEMORY_RULES } = require('../dist/lib/conversationAwareness');
 const { buildSystemPrompt, summarizeConversation } = require('../dist/lib/providers');
 const { ROLEPLAY_ENGINES } = require('../dist/lib/providers/engines');
@@ -100,9 +100,18 @@ test('oversized conditional speech is dropped whole, not recalled as a false eve
   assert.equal(result.memory, '');
 });
 
+test('continuation does not claim an old user message is new input', () => {
+  const guard = buildAwarenessTurnGuard([...recent, msg('a2', 'assistant', 'I unfold the map.')]);
+  assert.match(guard, /No new user dialogue or action was supplied/);
+  assert.doesNotMatch(guard, /Respond to the last user turn/);
+  // Regeneration removes that answer; the same user turn is answered afresh.
+  assert.match(buildAwarenessTurnGuard(recent), /Respond to the last user turn/);
+  assert.match(buildAwarenessTurnGuard([]), /without inventing an earlier exchange/);
+});
+
 test('setup is bounded, JSON quoted, and explicitly subordinate to current scene', () => {
   const setup = buildCharacterSetup({ tagline: 'Archivist', greeting: 'Hello "friend"\n' + 'x'.repeat(9000) });
-  assert.match(setup, /later developments override this opening/i);
+  assert.match(setup, /later developments override this opening/);
   assert.match(setup, /\\"friend\\"\\n/);
   assert.ok(setup.length < 5500);
   assert.equal(buildCharacterSetup({}), '');
@@ -112,13 +121,13 @@ const character = { name: 'Mira', personality: 'Reserved archivist; careful and 
   backstory: 'Protects the municipal records.', greeting: '*I unlock the archive door.* You came about the map?',
   tagline: 'Keeper of the archive' };
 for (const engine of Object.values(ROLEPLAY_ENGINES)) {
-  test(`${engine.id}: persona, initial scene and language rule reach the prompt`, () => {
+  test(`${engine.id}: persona, initial scene, and shared situation grounding reach the prompt`, () => {
     const prompt = buildSystemPrompt(character, { explicitMode: false, engine });
-    assert.ok(prompt.includes(LANGUAGE_RULE));
+    assert.ok(prompt.includes(CONVERSATION_AWARENESS_RULES));
     assert.ok(prompt.includes(character.personality));
     assert.ok(prompt.includes(character.greeting));
     assert.ok(prompt.includes(character.tagline));
-    assert.equal(prompt.split(LANGUAGE_RULE).length, 2);
+    assert.equal(prompt.split(CONVERSATION_AWARENESS_RULES).length, 2);
   });
 }
 

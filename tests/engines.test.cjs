@@ -27,7 +27,11 @@ test('Choco Hazelnut is at least as strong as Chocolate and Hazelnut on every ax
   assert.ok(c.recentMessageWindow >= 15);           // Chocolate 15, Hazelnut 10
   assert.ok(c.temperature >= 0.87 && c.topP >= 0.95);
   assert.equal(c.roleplayStyle, 'intense');         // matches the frontend
-  assert.equal(c.voiceNotes, '', 'writing style is left to the model');
+  assert.ok(c.voiceNotes.length <= 1800, 'fits the compact prompt voice-note budget untruncated');
+  // Ideas from both engines survive in the merged notes.
+  assert.match(c.voiceNotes, /unresolved threads/i);        // Chocolate
+  assert.match(c.voiceNotes, /independent, persona-consistent/i); // Hazelnut
+  assert.match(c.voiceNotes, /hesitation or refusal/i);     // consent guard, both
 });
 
 test('retired and alternate engine ids resolve to the two current engines', () => {
@@ -72,7 +76,7 @@ test('Plus is the only paid plan: 200 INR/month, quarterly x2.85, yearly x10', (
   assert.equal(membershipAmountInPaise('plus', 'yearly'), 200000);
 });
 
-test('Choco Hazelnut prompt keeps the adult-only and consent rules in both context modes', () => {
+test('Choco Hazelnut prompt carries the merged voice notes in both context modes', () => {
   const character = { name: 'Mira', personality: 'Reserved archivist.', backstory: 'Keeps records.' };
   const engine = ROLEPLAY_ENGINES.choco_hazelnut;
   const previous = process.env.HAZELNUT_COMPACT_CONTEXT;
@@ -80,8 +84,8 @@ test('Choco Hazelnut prompt keeps the adult-only and consent rules in both conte
     for (const mode of [undefined, 'false']) {
       if (mode === undefined) delete process.env.HAZELNUT_COMPACT_CONTEXT; else process.env.HAZELNUT_COMPACT_CONTEXT = mode;
       const prompt = buildSystemPrompt(character, { explicitMode: true, engine, voiceNotes: engine.voiceNotes });
-      assert.match(prompt, /clearly 18\+ and the context is consensual/);
-      assert.match(prompt, /Respect hesitation or refusal immediately/);
+      assert.ok(prompt.includes(engine.voiceNotes), `full voice notes present (compact=${mode !== 'false'})`);
+      assert.match(prompt, /At Choco Hazelnut tier/);
     }
   } finally {
     if (previous === undefined) delete process.env.HAZELNUT_COMPACT_CONTEXT; else process.env.HAZELNUT_COMPACT_CONTEXT = previous;

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { summarizeDbError, createDbFailureLogger } = require('../dist/lib/dbFailureLog');
 const { noteReplyForWindow, formatReplyWindow } = require('../dist/lib/providers/tokenStats');
-
+const { buildReplyGuidance, planReply } = require('../dist/lib/providers/replyPolicy');
 
 const prismaError = Object.assign(new Error("\nInvalid `prisma.$queryRaw()` invocation:\n\n\nCan't reach database server at `gateway01.example.com:4000`\n\nPlease make sure your database server is running at `gateway01.example.com:4000`."), { code: 'P1001' });
 
@@ -43,4 +43,14 @@ test('the per-reply window shows the real input cost and the top-up rate', () =>
   assert.match(line, /replies: 3 \| with top-up\/continuation: 2 \(67%\)/);
   assert.match(line, /avg input per reply: 4633/);
   assert.match(line, /1 with unreported calls/);
+});
+
+test('the envelope states the word floor outside the adaptive arm, and not inside it', () => {
+  assert.match(buildReplyGuidance(10, 'normal', false), /Even a greeting or a one-line message gets at least 105 words/);
+  assert.match(buildReplyGuidance(7, 'normal', false), /gets at least 50 words/);
+  assert.doesNotMatch(buildReplyGuidance(10, 'rapid', true), /Even a greeting/, 'relaxed floor keeps its own wording');
+  assert.doesNotMatch(buildReplyGuidance(10, 'rapid', false), /turn is brief/, 'control arm still never suggests a smaller reply');
+  // The server-side floor and ceiling are unchanged.
+  const plan = planReply(10, 'hi', '', { adaptiveRhythm: false });
+  assert.equal(plan.minWords, 105); assert.equal(plan.maxWords, 130); assert.equal(plan.maxTokens, 256);
 });

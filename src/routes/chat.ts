@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { createHash } from "node:crypto";
-import { classifyUserBeat } from "../lib/providers/turnDirector";
+import { buildAwarenessTurnGuard } from "../lib/conversationAwareness";
+import { formatTurnSteers, planTurnSteers } from "../lib/providers/turnDirector";
 import { resolveArms } from "../lib/roleplayFlags";
 import { logReplyTelemetry } from "../lib/replyTelemetry";
+import { anchorPlacement, buildRecencyAnchor, insertTailSystemMessage, withRecencyAnchor } from "../lib/providers/recencyAnchor";
 import { buildStoryContext } from "../lib/storyContext";
 import type { Prisma } from "@prisma/client";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -24,12 +26,13 @@ import {
   parseSpiceLevel,
   parseRoleplayStyle,
   cleanAssistantResponse,
+  withPersonaAnchor,
   maxTokensForIntelligence,
 } from "../lib/providers";
 import { estimateTokens, hazelnutContextEnabled, buildRecallQuery, recallTerms, selectHazelnutContext, hazelnutMinHistoryTokens } from "../lib/hazelnutContext";
 import { withTokenAccounting } from "../lib/providers/tokenStats";
 import { planReply } from "../lib/providers/replyPolicy";
-import { buildDirectorTailNote, buildRoleplayTurnGuard, formatRoleplayInput, insertDirectorNote } from "../lib/roleplayInput";
+import { buildDirectorTailNote, buildRoleplayTurnGuard, formatRoleplayInput, insertDirectorNote, sanitizeSceneDirective } from "../lib/roleplayInput";
 import type { GenParams, TtsVoice } from "../lib/providers";
 import { resolveEngineForTier, normalizeMembershipTier, PREMIUM_ENGINE_ID } from "../lib/providers/engines";
 import { computeRelationshipLevel } from "../lib/relationship";
@@ -292,8 +295,9 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
     : { maxTokens };
   const recentWindow = engine?.id === PREMIUM_ENGINE_ID && !compactHazelnut ? 20 : engine?.recentMessageWindow ?? RECENT_MESSAGE_WINDOW;
   const summarizeTrigger = engine?.id === PREMIUM_ENGINE_ID && !compactHazelnut ? 36 : engine?.summarizeTrigger ?? SUMMARIZE_TRIGGER;
-  const sceneDirective =
-    typeof body.sceneDirective === "string" ? body.sceneDirective.trim().slice(0, 1000) : undefined;
+  const sceneDirective = typeof body.sceneDirective === "string"
+    ? sanitizeSceneDirective(body.sceneDirective) || undefined
+    : undefined;
 
   if (!isRegenerate && !isEdit && !userMessage && !sceneDirective) {
     return res.status(400).json({ error: "Message can't be empty." });
@@ -401,20 +405,46 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   // normal path.
   const recentHistory = relevant.length <= summarizeTrigger * 2 ? relevant : relevant.slice(-recentWindow);
 
+  // Gap between the character's last reply and the user's latest message —
+  // what powers buildTimeAwarenessBlock (see its comment in providers/
+  // index.ts for why this is worth computing). Pure Date math over rows
+  // already fetched above, so this costs nothing extra: no query, no
+  // tokens unless the resulting block actually gets included. Takes the
+  // last two entries of the *full* filtered history rather than
+  // recentHistory, since a long-idle chat could in principle have a
+  // window smaller than 2 — recentWindow only trims which turns are sent
+  // verbatim, it shouldn't be able to hide the gap we're measuring.
+  let minutesSinceLastMessage: number | undefined;
+  const gapPair = relevant.slice(-2);
+  if (gapPair.length === 2 && gapPair[0].role === "assistant" && gapPair[1].role === "user") {
+    minutesSinceLastMessage = (gapPair[1].createdAt.getTime() - gapPair[0].createdAt.getTime()) / 60000;
+  }
+
   // OPTIMIZATION: Use cached system prompt when character hasn't changed.
   // IMPORTANT: the key must cover every input that changes the generated
   // text, not just the character's static fields — otherwise a stale
   // cached prompt (missing the latest folded-in memory, or built with a
-  // different voice-notes value) gets served for up to
+  // different voice-notes/time-gap value) gets served for up to
   // PROMPT_CACHE_TTL_MS. buildSystemPrompt also reads character.memorySummary
   // and character.examples (which change as the conversation progresses via
-  // maybeSummarize) and opts.voiceNotes (a per-request value). The scene
-  // director steer is per-turn and is NOT part of the cached prompt.
+  // maybeSummarize), opts.voiceNotes (a per-request value), and
+  // minutesSinceLastMessage (which drives the "time gap" block, gated to
+  // >=10 minutes and rounded to minute/hour/day — bucketed the same way
+  // here so we don't fragment the cache over meaningless sub-minute noise).
+  const intelligenceForCache = engine?.intelligence ?? 5;
+  const timeGapBucket =
+    intelligenceForCache < 6 || minutesSinceLastMessage === undefined || minutesSinceLastMessage < 10
+      ? "none"
+      : minutesSinceLastMessage < 60
+      ? `m${Math.round(minutesSinceLastMessage)}`
+      : minutesSinceLastMessage < 60 * 24
+      ? `h${Math.round(minutesSinceLastMessage / 60)}`
+      : `d${Math.round(minutesSinceLastMessage / (60 * 24))}`;
   const promptCacheKey = createHash("sha256").update(JSON.stringify([
-    compactHazelnut ? "compact-v10-minimal" : "standard-v10-minimal", characterId, character.name,
+    compactHazelnut ? "compact-v10-director" : "standard-v9-director", characterId, character.name,
     character.personality, character.backstory, character.roleplayNotes, character.tagline, character.greeting,
     character.memorySummary ?? "", character.examples ?? "", engine?.id ?? "none", explicitMode,
-    spiceLevel, roleplayStyle, voiceNotes,
+    spiceLevel, roleplayStyle, voiceNotes, timeGapBucket,
   ])).digest("hex");
   let system = getCachedPrompt(promptCacheKey);
   if (!system) {
@@ -424,6 +454,8 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       roleplayStyle,
       voiceNotes,
       engine,
+      minutesSinceLastMessage,
+      deferReplyGuidance: true,
     });
     setCachedPrompt(promptCacheKey, system);
   }
@@ -434,22 +466,46 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       content: m.content,
     })),
   ];
-  // Sticky per-user experiment arms are kept only for telemetry; no persona
-  // anchor, length envelope or turn steers are injected any more.
+  // Keep identity guidance in system context. User speech remains unchanged,
+  // including during regeneration and scene continuation.
+  // Sticky per-user experiment arms (see roleplayFlags.ts). The persona
+  // reminder moves to the END of the context, where attention is strongest:
+  // the old suffix on the system message had no recency at all and was skipped
+  // on the default Plus path. A user in the control arm keeps the old behaviour.
   const arms = resolveArms(userId);
+  const anchorMode = anchorPlacement();
+  const tailAnchor = arms.personaAnchor && anchorMode === "tail" ? buildRecencyAnchor(character) : "";
+  if (arms.personaAnchor && anchorMode === "system") withRecencyAnchor(chatMessages, character, "system");
+  else if (!arms.personaAnchor && !compactHazelnut) withPersonaAnchor(chatMessages, character, intelligence);
+  // Fresh on every request, including engine switches and regeneration; never
+  // cache turn-specific pacing inside the reusable character prompt.
   const latestUserText = [...recentHistory].reverse().find(m => m.role === "user")?.content ?? "";
   const lastIsUserTurn = relevant[relevant.length - 1]?.role === "user";
-  const replyPlan = planReply();
-  genParams.maxTokens = maxTokens;
+  const replyPlan = planReply(intelligence, lastIsUserTurn ? latestUserText : "", sceneDirective, { adaptiveRhythm: arms.adaptiveRhythm });
+  genParams.maxTokens = replyPlan.maxTokens;
   genParams.continuationMaxTokens = replyPlan.continuationMaxTokens;
-  genParams.preserveStreamedLength = false;
-  // The narrator / scene director is the one per-turn instruction: it comes from
-  // text between asterisks in the user's latest turn and from the quick-action steer.
-  // It is rebuilt on every request (never cached) and placed last, next to the
-  // final message, where it is read with the most weight.
+  genParams.preserveStreamedLength = replyPlan.preserveStreamedLength;
+  genParams.targetWords = replyPlan.targetWords;
+  genParams.minWords = replyPlan.minWords;
+  genParams.maxWords = replyPlan.maxWords;
+  chatMessages[0].content += `\n\n${replyPlan.instruction}`;
+  // The same envelope, restated next to the final message (see buildLengthReminder).
+  // Honors ROLEPLAY_ANCHOR_PLACEMENT=system for models that reject a later system turn.
+  const tailNote = [tailAnchor, anchorMode === "tail" ? replyPlan.lengthReminder : ""].filter(Boolean).join("\n");
+  // Include this per-turn guard in Hazelnut's context budgeting, not the cached
+  // persona prompt. Keep it after recalled evidence at the provider boundary.
+  const turnSteers = arms.director
+    ? planTurnSteers({ history: relevant, latestUserText, characterName: character.name, sceneDirective,
+        knownFacts: [character.tagline, character.personality, character.backstory, character.greeting, character.roleplayNotes, character.memorySummary].filter(Boolean).join(" "),
+        adaptiveRhythm: arms.adaptiveRhythm, actionCap: arms.actionCap })
+    : [];
   const directorInput = lastIsUserTurn ? latestUserText : "";
-  const inputTurnGuard = buildRoleplayTurnGuard(directorInput, sceneDirective);
-  const tailNote = buildDirectorTailNote(directorInput, sceneDirective);
+  const inputTurnGuard = buildAwarenessTurnGuard(relevant) +
+    (lastIsUserTurn ? buildRoleplayTurnGuard(directorInput, sceneDirective) : buildRoleplayTurnGuard("", sceneDirective)) +
+    // Deterministic shape steer from the character's own recent replies
+    // (opening/closing habits, stock phrases) and the size of the user's beat.
+    formatTurnSteers(turnSteers);
+  const directorTailNote = buildDirectorTailNote(directorInput, sceneDirective);
   if (compactHazelnut) {
     const query = buildRecallQuery(relevant, sceneDirective);
     const terms = recallTerms(query);
@@ -487,14 +543,14 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       }
     }
     const selection = selectHazelnutContext({ history: relevant, recalled, query,
-      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote),
+      systemTokens: estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote + directorTailNote),
       minHistoryTokens: hazelnutMinHistoryTokens() });
     chatMessages = [{ role: "system", content: chatMessages[0].content + selection.memory }, ...selection.messages];
     console.log(`[hazelnut-context] ${JSON.stringify(selection.diagnostics)}`);
   } else if (recentHistory.length < relevant.length) {
     // If summaries lag, keep complete recent exchanges plus relevant older
     // evidence instead of silently discarding the intervening scene/constraints.
-    const systemTokens = estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote);
+    const systemTokens = estimateTokens(chatMessages[0].content + inputTurnGuard + tailNote + directorTailNote);
     const selection = selectHazelnutContext({ history: relevant,
       query: buildRecallQuery(relevant, sceneDirective), systemTokens,
       targetTokens: systemTokens + Math.max(1800, recentWindow * 180) });
@@ -504,7 +560,15 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   chatMessages[0].content += inputTurnGuard;
   // Inserted only after the context budget has rebuilt chatMessages above,
   // otherwise the rebuild would silently drop it.
-  if (tailNote) insertDirectorNote(chatMessages, tailNote);
+  if (tailNote) insertTailSystemMessage(chatMessages, tailNote);
+  // The narrator/scene-director note is the last instruction before the final
+  // message, so persona/length and existing turn-shaping features stay intact.
+  if (directorTailNote) {
+    // Honour the existing strict-template fallback for models that reject
+    // additional system turns; normal configurations keep the director last.
+    if (anchorMode === "system") chatMessages[0].content += `\n\n${directorTailNote}`;
+    else insertDirectorNote(chatMessages, directorTailNote);
+  }
   // Label input only at the provider boundary; saved messages remain original.
   chatMessages = chatMessages.map(m => m.role === "user"
     ? { ...m, content: formatRoleplayInput(m.content) } : m);
@@ -579,7 +643,11 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
     ));
 
     if (fullText.trim().length > 0) {
-      const finalText = cleanAssistantResponse(fullText.trim(), character.name);
+      const recentAssistantReplies = recentHistory
+        .filter((m: { role: string; content: string }) => m.role === "assistant")
+        .slice(-6)
+        .map((m: { content: string }) => m.content);
+      const finalText = cleanAssistantResponse(fullText.trim(), intelligence, recentAssistantReplies, character.name);
       // NOTE: the save must complete BEFORE we count messages for the
       // relationship level — they are not independent, so this cannot be
       // parallelized with Promise.all without racing the count against the
@@ -601,7 +669,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       if (!regenTargetId && !stopController.signal.aborted) {
         logReplyTelemetry({
           userId, characterId, engineId: engine?.id ?? "none", intelligence, arms,
-          beat: classifyUserBeat(lastIsUserTurn ? latestUserText : ""), steerIds: [],
+          beat: replyPlan.beat, steerIds: turnSteers.map(s => s.id),
           turn: (character.summarizedThrough ?? 0) + relevant.length, reply: finalText,
         });
       }

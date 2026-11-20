@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { measureReply, measureTranscript, driftReport } = require('../dist/lib/providers/replyMetrics');
 const { buildReplyTelemetry, logReplyTelemetry, pseudonym, TELEMETRY_TAG } = require('../dist/lib/replyTelemetry');
-const { buildDirectorTailNote, insertDirectorNote, buildRoleplayTurnGuard } = require('../dist/lib/roleplayInput');
+const { buildRecencyAnchor, insertTailSystemMessage } = require('../dist/lib/providers/recencyAnchor');
 const { planTurnSteers } = require('../dist/lib/providers/turnDirector');
 const { parseFlag } = require('../dist/lib/roleplayFlags');
 const { parseTelemetryLines, analyzeTelemetry, normalCdf, twoProportionTest, renderReport } = require('../dist/lib/roleplayReport');
@@ -273,7 +273,7 @@ test('scripts: roleplay-report and drift-report run end to end and fail loudly o
 });
 
 // ------------------------------------------------------------------- fuzz
-test('seeded fuzz over the new untrusted-input paths: director note, steers, log parser, metrics, flags, telemetry', () => {
+test('seeded fuzz over the new untrusted-input paths: anchor, steers, log parser, metrics, flags, telemetry', () => {
   let seed = 777;
   const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
   const pick = a => a[Math.floor(rnd() * a.length)];
@@ -282,11 +282,13 @@ test('seeded fuzz over the new untrusted-input paths: director note, steers, log
   const gen = () => Array.from({ length: Math.floor(rnd() * 30) }, () => pick(atoms)).join('');
   for (let i = 0; i < 3000; i++) {
     const s = gen(), t = gen();
-    const note = buildDirectorTailNote(`${s} **${t}**`, t);
-    assert.doesNotThrow(() => buildRoleplayTurnGuard(s, t));
+    const anchor = buildRecencyAnchor({ name: s, personality: t });
+    const json = anchor.match(/\{.*\}(?=\. Stay)/);
+    assert.ok(json, 'anchor keeps its shape');
+    assert.doesNotThrow(() => JSON.parse(json[0]), 'quoted fields always parse back as data');
     const m = [{ role: 'system', content: 'p' }, { role: pick(['user', 'assistant']), content: t }];
-    insertDirectorNote(m, note); insertDirectorNote(m, note);
-    assert.equal(m.length, note ? 3 : 2, 'inserted exactly once');
+    insertTailSystemMessage(m, anchor); insertTailSystemMessage(m, anchor);
+    assert.equal(m.length, 3, 'inserted exactly once');
     planTurnSteers({ history: [{ role: 'user', content: s }, { role: 'assistant', content: t }, { role: 'assistant', content: s }, { role: 'user', content: t }],
       latestUserText: s, characterName: t, adaptiveRhythm: rnd() < .5, actionCap: rnd() < .5 });
     parseTelemetryLines(`${s}\n${t}\n[roleplay-telemetry] ${s}`);

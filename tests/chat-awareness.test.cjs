@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const { once } = require('node:events');
-const { LANGUAGE_RULE } = require('../dist/lib/conversationAwareness');
+const { CONVERSATION_AWARENESS_RULES } = require('../dist/lib/conversationAwareness');
 
 test('chat route delivers awareness through engine switches, continuation, regeneration and cache updates', async t => {
   let history = [], captured, counter = 0, useRealCount = false, recallWhere, summaryCommitted;
@@ -81,32 +81,35 @@ test('chat route delivers awareness through engine switches, continuation, regen
     return captured;
   };
   try {
-    for (const engineId of ['strawberry', 'choco_hazelnut', 'vanilla', 'chocolate', 'hazelnut']) {
+    for (const [engineId, maxWords] of [['strawberry', 70], ['choco_hazelnut', 130], ['vanilla', 70], ['chocolate', 130], ['hazelnut', 130]]) {
       await t.test(engineId, async () => {
         history = [make('user', 'Where is the map?'), make('assistant', 'Shall I check the archive?')];
         const result = await request({ engineId, message: 'Yes *I secretly hope it is there*' });
-        assert.ok(result.messages[0].content.includes(LANGUAGE_RULE));
-        assert.match(result.messages[0].content, /CURRENT USER TURN/);
+        assert.ok(result.messages[0].content.includes(CONVERSATION_AWARENESS_RULES));
+        assert.match(result.messages[0].content, /CURRENT RESPONSE FOCUS/);
         assert.match(result.messages.at(-1).content, /narrator_director/);
-        // No persona anchor / length reminder any more; the conversation is in order.
+        // The director note is last, after the persona anchor; the
+        // conversation itself (ignoring system notes) is still in order.
         const convo = result.messages.slice(1).filter(m => m.role !== 'system');
         assert.equal(convo.at(-1).role, 'user');
         assert.match(convo.at(-2).content, /Shall I check the archive/);
-        assert.equal(result.params.maxWords, undefined, 'no word ceiling is enforced');
-        assert.equal(result.params.minWords, undefined);
+        assert.match(result.messages.at(-2).content, /^NARRATOR \/ SCENE DIRECTOR/);
+        assert.match(result.messages.at(-3).content, /^CHARACTER REMINDER/);
+        assert.equal(result.params.maxWords, maxWords);
         assert.equal(history.at(-2).content, 'Yes *I secretly hope it is there*');
       });
     }
     await t.test('continue', async () => {
       history = [make('user', 'Yes *I am secretly nervous*'), make('assistant', '*I unfold the map.*')];
       const result = await request({ engineId: 'hazelnut', sceneDirective: 'Continue' });
-      assert.doesNotMatch(result.messages[0].content, /PERCEPTION CHECK/);
-      assert.match(result.messages[0].content, /scene-director steer/);
+      assert.match(result.messages[0].content, /No new user dialogue or action was supplied/);
+      assert.doesNotMatch(result.messages[0].content, /CURRENT USER TURN — PERCEPTION CHECK/);
       assert.equal(result.messages.at(-1).role, 'assistant');
     });
     await t.test('regenerate', async () => {
       history = [make('user', 'Where is the map?'), make('assistant', 'Discard this old answer.')];
       const result = await request({ engineId: 'hazelnut', regenerate: true });
+      assert.match(result.messages[0].content, /Respond to the last user turn/);
       assert.doesNotMatch(JSON.stringify(result.messages), /Discard this old answer/);
       assert.equal(history.length, 2);
     });

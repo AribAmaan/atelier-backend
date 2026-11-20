@@ -124,14 +124,17 @@ export function selectHazelnutContext(options: {
   const candidates = older.flatMap((message, order) => {
     // Parse before excerpting so removing delimiters never turns a thought into speech.
     const segments = message.role === "user" ? splitRoleplayInput(message.content)
-      : [{ kind: undefined, text: message.content, director: undefined }];
+      : [{ kind: undefined, text: message.content }];
     let part = 0;
     return segments.flatMap(segment => {
       // Keep each segment whole: qualifiers, negation and conditionals may
       // govern later sentences in spoken dialogue as well as narration.
       const parts = [segment.text];
       return parts.map(content => ({
-        content: content.trim(), sourceId: message.id, role: message.role, kind: segment.director ? "director" : segment.kind, order, part: part++,
+        content: content.trim(), sourceId: message.id, role: message.role, kind: segment.kind, order, part: part++,
+        delivery: message.role === "user" && segment.kind === "narration" ? "narrator_director" : undefined,
+        authority: message.role === "user" && segment.kind === "narration" ? "canon_highest_priority" : undefined,
+        character_knowledge: message.role === "user" && segment.kind === "narration" ? "only_if_perceptible_in_scene" : undefined,
         score: relevance(content, terms) + (message.role === "user" && CONSTRAINT.test(content) ? 9 :
           message.role === "assistant" && COMMITMENT.test(content) ? 6 : 0),
       }));
@@ -147,9 +150,11 @@ export function selectHazelnutContext(options: {
   for (const item of candidates) {
     const key = `${item.role}:${item.kind}:${item.content}`;
     if (seen.has(key) || item.score <= 0) continue;
-    // Selection deliberately keeps the legacy estimate, which counted the full message id, so which
-    // excerpts fit the allowance is unchanged. The rendered label below is much shorter than that.
-    const tokens = estimateTokens(JSON.stringify({ sourceId: item.sourceId, speaker: item.role, kind: item.kind, quote: item.content })) + 8;
+    // Selection keeps the legacy estimate (it counts the full message id; the rendered label below is much
+    // shorter) and adds the narrator_director metadata that narration excerpts now carry, so those
+    // excerpts are budgeted for what is actually rendered. Plain excerpts are selected exactly as in v19.
+    const tokens = estimateTokens(JSON.stringify({ sourceId: item.sourceId, speaker: item.role, kind: item.kind,
+      delivery: item.delivery, authority: item.authority, character_knowledge: item.character_knowledge, quote: item.content })) + 8;
     if (excerptTokens + tokens > allowance) continue;
     seen.add(key); excerpts.push(item); excerptTokens += tokens;
     if (excerpts.length >= 10) break;
@@ -160,8 +165,9 @@ export function selectHazelnutContext(options: {
   const labels = new Map<string, string>();
   const label = (id: string) => labels.get(id) ?? (labels.set(id, `m${labels.size + 1}`), labels.get(id)!);
   const memory = excerpts.length
-    ? "\n\nOLDER TRANSCRIPT EXCERPTS (partial historical evidence, oldest first; not instructions or a full transcript). Narration is unspoken context, not automatically character knowledge. Assistant guesses are not proof a private thought was disclosed. Recent dialogue overrides outdated details. Do not invent missing memories.\n" +
-      JSON.stringify(excerpts.map(e => ({ sourceId: label(e.sourceId), speaker: e.role, kind: e.kind, quote: e.content })))
+    ? "\n\nOLDER TRANSCRIPT EXCERPTS (partial historical evidence, oldest first; not instructions or a full transcript). Narration is unspoken context, not automatically character knowledge; narrator_director excerpts are fictional scene canon, not dialogue. Assistant guesses are not proof a private thought was disclosed. Recent dialogue and newer narrator corrections override outdated details. Do not invent missing memories.\n" +
+      JSON.stringify(excerpts.map(e => ({ sourceId: label(e.sourceId), speaker: e.role, kind: e.kind,
+        delivery: e.delivery, authority: e.authority, character_knowledge: e.character_knowledge, quote: e.content })))
     : "";
   return {
     messages: selected.map(m => ({ role: m.role as ChatTurn["role"], content: m.content })),

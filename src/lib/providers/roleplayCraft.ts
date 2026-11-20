@@ -22,7 +22,7 @@ VOICE: this person's rhythm, idiom, humour and guardedness; contractions, fragme
 PROPORTION: the moment sets the weight and pace, and the reply envelope sets the length. A quick exchange gets a light, quick-moving beat; a charged one earns the fuller range.
 MOMENTUM: end where the scene keeps moving (a line, an action, a shift in the room, a choice to answer). Ask a question only when the character truly needs the answer: at most one, and not at the end of consecutive replies.
 CONTINUITY: show memory through behaviour, not recitation ("as you said earlier"); emotion moves forward with its cause and does not reset.
-FRAME: stay in the fiction, with no assistant phrasing, offers of help, scene summaries, headings, lists or emoji (unless the persona uses them). Output only the reply, with no speaker label.`;
+FRAME: stay in the fiction, with no assistant phrasing, offers of help, scene summaries, headings, lists or emoji (unless the persona uses them). Keep the main persona's dialogue unlabeled; when a supporting character speaks, prefix that line with their name so the voices stay clear. Output only the scene reply.`;
 
 /** Tier-specific depth, the only part of the craft that differs between engines. */
 export function craftDepthLine(intelligence: number): string {
