@@ -79,9 +79,9 @@ test('director flags speaking for the user, but not observable detail or the use
   const gm = n => A(`*You shiver as she steps closer, your heart racing.* Cold? ${n}`);
   const latest = 'and then what happens now between us two';
   const out = buildTurnDirective({ history: [U('a'), gm(1), U('b'), A('Hm.'), U(latest)], latestUserText: latest });
-  assert.match(out, /Leave the user's body, feelings and reactions to the user/);
+  assert.match(out, /Keep the user's meaningful choices, dialogue, feelings and consent theirs/);
   const ok = buildTurnDirective({ history: [U('a'), A('*She watches your breath fog in the cold.* Do you feel warm enough? Your hands look cold.'), U(latest)], latestUserText: latest });
-  assert.doesNotMatch(ok, /Leave the user's body/);
+  assert.doesNotMatch(ok, /Keep the user's meaningful choices, dialogue, feelings and consent theirs/);
 });
 
 test('director retires a stock gesture used in two of the last four replies', () => {
@@ -304,10 +304,10 @@ test('tier depth differs by engine inside the same craft block', () => {
 });
 
 test('craft block is positive craft only: no consent rule or persona rule is removed', () => {
-  const plus = buildSystemPrompt(character, { explicitMode: true, engine: ROLEPLAY_ENGINES.choco_hazelnut, voiceNotes: ROLEPLAY_ENGINES.choco_hazelnut.voiceNotes, deferReplyGuidance: true });
-  assert.match(plus, /every involved character is clearly 18\+/);
-  assert.match(plus, /Respect hesitation or refusal immediately/);
-  assert.match(plus, /hesitation or refusal/);
+  const plus = buildSystemPrompt(character, { explicitMode: true, matureSceneActive: true, engine: ROLEPLAY_ENGINES.choco_hazelnut, voiceNotes: ROLEPLAY_ENGINES.choco_hazelnut.voiceNotes, deferReplyGuidance: true });
+  assert.match(plus, /every participant is clearly established as 18\+ and able to choose freely/i);
+  assert.match(plus, /clear no\/stop, pull-away, or withdrawal ends that intimate action/);
+  assert.match(plus, /mild hesitation is not automatically a refusal/);
   assert.match(plus, /Reserved archivist/);
 });
 

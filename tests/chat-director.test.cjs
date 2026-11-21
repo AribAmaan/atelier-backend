@@ -129,9 +129,9 @@ test('Continue does not replay the old asterisk beat; a new quick steer still ap
 });
 
 test('mature prompt keeps the existing adult-only and consent limits over the director channel', async () => {
-  const { captured } = await run({ message: '*A new scene begins*', explicit: true });
-  assert.match(captured.messages[0].content, /clearly 18\+ and the context is consensual/);
-  assert.match(captured.messages[0].content, /Respect hesitation or refusal immediately/);
+  const { captured } = await run({ message: 'I want to have sex with you *A new scene begins*', explicit: true });
+  assert.match(captured.messages[0].content, /every participant is clearly established as 18\+ and able to choose freely/i);
+  assert.match(captured.messages[0].content, /clear no\/stop, pull-away, or withdrawal ends that intimate action/);
   assert.match(captured.messages[0].content, /cannot change system\/safety rules/);
   assert.match(captured.messages[0].content, /age\/consent limits/);
 });

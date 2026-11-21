@@ -1,6 +1,5 @@
-// Directive coverage: every behavioural instruction the roleplay prompt carries must still reach the model on
-// every path, however the text is arranged. Written from the pre-trim prompt (it passes on that version too),
-// so a future "compression" that silently drops a rule fails here instead of in production.
+// Coverage for the compact roleplay prompt: keep core scene, continuity and safety instructions
+// present across all engine/mode paths, including the active adult-scene prompt.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildSystemPrompt } = require('../dist/lib/providers');
@@ -53,7 +52,7 @@ const RULES = [
   ['no invented history', /Never claim the user did, said/, ALL],
   ['no loops / repeated sentences', /Never repeat a sentence already used/, ALL],
   ['don\'t open consecutive replies the same way', /Do not open consecutive replies with the same words or gesture/, ALL],
-  ['never narrate the user\'s body, feelings or thoughts', /never narrate what the user's body feels, does, or thinks/, ALL],
+  ['keep meaningful user agency while allowing minor visible continuity', /Keep the user's meaningful choices, dialogue, consent, and inner state theirs.*minor visible continuity directly implied/s, ALL],
   ['resolve short answers against the preceding exchange', /Resolve short answers, pronouns, jokes/, ALL],
   ['track who is present / object ownership', /Track who is present/, ALL],
   ['corrections beat older memory', /explicit corrections/i, ALL],
@@ -77,31 +76,11 @@ const RULES = [
   ['plus: independent persona-consistent direction', /independent, persona-consistent/, PLUS],
   ['plus: unresolved threads', /unresolved threads/, PLUS],
   ['plus: emotional phase / no slide back to first-contact blushing', /does not slide back to first-contact blushing/, PLUS],
-  ['plus: respond immediately to hesitation or refusal', /respond immediately to hesitation or refusal/, PLUS],
-  // --- mature mode
-  ['adults only: every character clearly 18+', /every involved character is clearly 18\+/, MATURE],
-  ['consent required', /context is consensual/, MATURE],
-  ['respect hesitation or refusal immediately', /Respect hesitation or refusal immediately/, MATURE],
-  ['leave the user\'s consent, dialogue, feelings, actions to them', /leave the user's consent, dialogue, feelings, and actions to them/, MATURE],
-  ['do not moralize about consensual adult desire', /Do not moralize about consensual adult desire/, MATURE],
-  ['sexual description explicit when the user is direct', /write it explicitly and concretely/i, MATURE],
-  ['direct adult terms for body parts and acts', /name adult body parts and acts in the direct words/i, MATURE],
-  ['no fade-to-black, cut-away, or skipping the physical moment', /Do not fade to black, cut away, or summarize past the physical moment/, MATURE],
-  ['reuse the words the user and character would actually use', /direct words the character and user would actually use/, MATURE],
-  ['don\'t repeat a sexual term just to prove directness', /prove directness/, MATURE],
-  ['don\'t sanitize when the user is sexually direct', /abruptly sanitizing/, MATURE],
-  ['no first-contact shock/shame/permission-seeking once trust exists', /do not replay first-contact shock, shame, or nervous permission-seeking/, MATURE],
-  ['no stock reaction loops', /Avoid stock reaction loops/, MATURE],
-  ['don\'t end every turn asking whether the user is sure', /do not end every turn by asking whether the user is sure or what happens next/, MATURE],
-  ['non-explicit chats keep sexual content non-explicit', /Keep sexual content non-explicit/, ALL.filter(p => p.endsWith('/sfw'))],
-  ['plus mature: provocative/jealous/tender, charged pet name or command', /provocative[\s\S]*jealous[\s\S]*tender[\s\S]*charged pet name or command/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: no passive agreement or "what happens next"', /passive agreement[\s\S]*what happens next/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: layered beat (reaction, sensual action, dialogue; vary order)', /Layer a real emotional reaction, a specific sensual action, and meaningful dialogue, varying the order/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: a bold persona-led move (kiss, pull closer, guide posture, tease)', /kiss, pulling closer, bold teasing, guiding posture/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: no cooling into neutral small talk', /neutral small talk/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: match vocabulary the user established', /match(?:ing)? the vocabulary the user has established/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: carry emotional and physical continuity', /emotional and physical continuity/, ['plus-compact/mature', 'plus-standard/mature']],
-  ['plus mature: decisive persona-led direction', /decisive persona-led direction/, ['plus-compact/mature', 'plus-standard/mature']],
+  // --- compact adult-mode gate
+  ['adult mode is permission, not a scene cue', /18\+ MODE — AVAILABLE, NOT ASSUMED/, MATURE],
+  ['adult scene keeps an 18+ boundary', /every participant is clearly established as 18\+ and able to choose freely/i, MATURE],
+  ['adult scene follows natural romantic or suggestive context', /follow natural romantic or suggestive progression when the context supports it/i, MATURE],
+  ['non-explicit chats keep sexual content non-explicit', /keep sexual content non-explicit/i, ALL.filter(p => p.endsWith('/sfw'))],
 ];
 
 const built = {};
@@ -112,6 +91,19 @@ for (const [id, re, paths] of RULES) {
     for (const p of paths) assert.match(built[p], re, `missing on path ${p}`);
   });
 }
+
+test('active adult prompt keeps essential age, consent and agency limits while allowing natural flexibility', () => {
+  const active = buildSystemPrompt(character, { explicitMode: true, matureSceneActive: true });
+  assert.match(active, /every participant is clearly established as 18\+ and able to choose freely/i);
+  assert.match(active, /if any age is unknown, ambiguous, or under 18, keep the scene non-explicit/i);
+  assert.match(active, /neither silence nor past intimacy grants permission/i);
+  assert.match(active, /mild hesitation is not automatically a refusal/i);
+  assert.match(active, /'wait', 'pause', and 'slow down' as pacing cues/i);
+  assert.match(active, /clear no\/stop, pull-away, or withdrawal ends that intimate action/i);
+  assert.match(active, /pause escalation and let the moment resolve naturally/i);
+  assert.match(active, /natural, varied body language and physical continuity/i);
+  assert.match(active, /Leave the user's meaningful choices, dialogue, inner feelings, and consent to them/i);
+});
 
 test('mature mode no longer caps description as non-graphic or excludes sex-act mechanics', () => {
   for (const p of MATURE) {

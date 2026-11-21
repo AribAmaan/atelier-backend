@@ -10,6 +10,9 @@
 // director wording in the system-prompt persona line. The v19 perception rules and examples are kept verbatim, so
 // this is purely additive. It buys: *...* / **...** beats treated as canon, side characters (*Suzy says*) actually
 // voiced instead of the main persona answering for them, and no refusal or commentary on narrator beats.
+// History: a further ~+170 estimated tokens for the SHAPE / BODY craft lines and the reshaped envelope sentence. They buy
+// fewer, fuller passages instead of a chain of one-line beats, concrete body detail, and no invented user mood or
+// repeated reassurance when the user only greets. Word floors and ceilings are unchanged.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildSystemPrompt } = require('../dist/lib/providers');
@@ -21,8 +24,8 @@ const { estimateTokens } = require('../dist/lib/hazelnutContext');
 
 const character = { name: 'Mira', personality: 'Reserved archivist who hides warmth behind dry humor.', backstory: 'Keeps the records of a coastal town.', greeting: 'The reading room is closed.', tagline: 'Archivist' };
 const BUDGETS = [
-  ['strawberry', false, true, 4250], ['strawberry', true, true, 4850],
-  ['choco_hazelnut', false, true, 4450], ['choco_hazelnut', true, true, 5175], ['choco_hazelnut', true, false, 5475],
+  ['strawberry', false, true, 4475], ['strawberry', true, true, 5075],
+  ['choco_hazelnut', false, true, 4650], ['choco_hazelnut', true, true, 5400], ['choco_hazelnut', true, false, 5700],
 ];
 for (const [engineId, explicit, compact, budget] of BUDGETS) {
   test(`fixed prompt stays within ${budget} estimated tokens: ${engineId} ${explicit ? 'mature' : 'sfw'} ${compact ? 'compact' : 'standard'}`, () => {

@@ -46,7 +46,7 @@ const AROUSAL = /\b(?:horny|aroused|erect(?:ion)?|(?:i(?:'m| am)|you(?:'re| are)
 // intentionally does not match. Keep this proximity-based and suppress clear
 // medical framing so ordinary health discussion does not activate the scene.
 const ANATOMY_AROUSAL = /\b(?:(?:my|your|his|her|their)\s+(?:cock|dick|penis)\b(?:(?![.!?]).){0,56}\b(?:hard|erect)(?:\s+(?:for\s+(?:you|me|him|her|them)|right\s+now|this\s+morning|tonight|already|again))?(?=[.!?,]|$)|(?:my|your|his|her|their)\s+(?:pussy|vagina|clit(?:oris)?)\b(?:(?![.!?]).){0,56}\bwet(?:\s+(?:for\s+(?:you|me|him|her|them)|right\s+now|already|again))?(?=[.!?,]|$))/i;
-const MEDICAL_AROUSAL_CONTEXT = /\b(?:doctor|medical|hospital|clinic|exam|condition|pain|injury|surgery|cancer|health|priapism|treatment|symptom)\b/i;
+const MEDICAL_AROUSAL_CONTEXT = /\b(?:doctor|medical|hospital|clinic|exam|condition|pain|injury|surgery|cancer|health|priapism|treatment|symptom|sore|swelling|rash|lump|infection|breastfeeding|nursing)\b/i;
 const AROUSAL_SOUND = /\b(?:moan(?:s|ed|ing)?|whimper(?:s|ed|ing)?)\b/i;
 
 // These are intimate enough to establish the scene by themselves even when
@@ -58,23 +58,26 @@ const INTIMATE_ACTION = /\b(?:kiss(?:es|ed|ing)?|touch(?:es|ed|ing)?|caress(?:es
 // Deliberately avoids bare "adult": "act like an adult" is not a sexual steer.
 const DIRECTIVE_MATURE = /\b(?:explicit|sexual|sexier|spicier|more\s+intimate|intimate\s+scene|heat\s+(?:it|this)\s+up|make\s+(?:it|this)\s+hotter|adult\s+(?:scene|content|roleplay))\b/i;
 
-const CONTINUATION_SHORT = /^\s*[\*_~]*(?:yes|yeah|yep|please|again|more|keep\s+going|continue|go\s+on|don'?t\s+stop|do\s+not\s+stop|closer|like\s+that|right\s+there|stay\s+close)[.!…\s\*_~-]*$/i;
+const CONTINUATION_SHORT = /^\s*[\*_~]*(?:yes|yeah|yep|please|again|more|keep\s+going|continue|go\s+on|don'?t\s+stop|do\s+not\s+stop|closer|like\s+that|right\s+there|stay\s+close|wait(?:\s+(?:a\s+)?(?:moment|second))?|hold\s+on(?:\s+(?:a\s+)?(?:moment|second))?|pause|slow\s+down(?:\s+a\s+little)?|take\s+it\s+slow|a\s+little\s+slower|give\s+me\s+(?:a\s+)?(?:moment|second)|i\s+need\s+(?:a\s+)?(?:moment|second)|i(?:\s+am|'m)\s+(?:(?:a\s+little|a\s+bit)\s+)?(?:not\s+sure|nervous))[.!…\s\*_~-]*$/i;
 // Used only when a strong mature cue exists in the very recent context and
 // the current turn is short, so natural phrasing like "I can't wait, keep
 // going" can carry scene state without making these words global triggers.
-const CONTINUATION_PHRASE = /\b(?:keep\s+going|continue|go\s+on|don'?t\s+stop|do\s+not\s+stop|again|more|like\s+that|right\s+there|stay\s+close)\b/i;
+const CONTINUATION_PHRASE = /\b(?:keep\s+going|continue|go\s+on|don'?t\s+stop|do\s+not\s+stop|again|more|like\s+that|right\s+there|stay\s+close|hold\s+on|slow\s+down|take\s+it\s+slow|a\s+little\s+slower|give\s+me\s+(?:a\s+)?(?:moment|second)|i\s+need\s+(?:a\s+)?(?:moment|second)|i(?:\s+am|'m)\s+(?:(?:a\s+little|a\s+bit)\s+)?(?:not\s+sure|nervous))\b/i;
 const CONTINUATION_ACTION = /\b(?:nod(?:s|ded|ding)?|lean(?:s|ed|ing)?\s+closer|come(?:s|came|ing)?\s+closer|hold(?:s|held|ing)?\s+me|pull(?:s|ed|ing)?\s+(?:you|me|him|her|them)\s+closer|(?:do(?:es)?\s+not|doesn'?t)\s+pull\s+away|stay(?:s|ed|ing)?\s+close)\b/i;
 
 // Strong boundaries are respected wherever they appear in spoken text.
-const STRONG_PULLBACK = /\b(?:not\s+now|enough|back\s+off|don'?t\s+touch|do\s+not\s+touch|i\s*(?:am|'m)\s+not\s+comfortable|change\s+the\s+subject|let'?s\s+talk\s+about\s+something\s+else|no\s+(?:more\s+)?(?:sex|sexual\s+stuff|intimacy|touching|kissing)|(?:i\s+)?(?:don'?t|do\s+not)\s+want\s+(?:any\s+)?(?:sex|sexual\s+stuff|intimacy|touching|kissing|to\s+(?:have\s+sex|be\s+sexual|do\s+anything\s+sexual))|(?:don'?t|do\s+not)\s+(?:be|make\s+(?:it|this))\s+(?:explicit|sexual|intimate)|nothing\s+sexual|keep\s+(?:it|this)\s+(?:non[- ]?sexual|sfw)|avoid\s+(?:sex|sexual\s+content|intimacy))\b/i;
+const STRONG_PULLBACK = /\b(?:not\s+now|enough|back\s+off|don'?t\s+touch|do\s+not\s+touch|i\s*(?:am|'m)\s+not\s+comfortable|i\s*(?:am|'m)\s+uncomfortable|i\s+feel\s+(?:uncomfortable|unsafe|scared)|i\s+(?:do\s+not|don't)\s+feel\s+(?:comfortable|safe)|(?:this|that)\s+(?:makes|is\s+making)\s+me\s+(?:uncomfortable|uneasy|unsafe|scared)|i\s*(?:am|'m)\s+(?:scared|afraid|unsafe|not\s+ready)|i\s+(?:have|'ve)\s+changed\s+my\s+mind|i\s+changed\s+my\s+mind|i\s+(?:do\s+not|don't)\s+want\s+(?:this|to\s+continue)|i\s+want\s+to\s+stop|let'?s\s+stop|change\s+the\s+subject|let'?s\s+talk\s+about\s+something\s+else|no\s+(?:more\s+)?(?:sex|sexual\s+stuff|intimacy|touching|kissing|explicit\s+content)|(?:i\s+)?(?:don'?t|do\s+not)\s+want\s+(?:any\s+)?(?:sex|sexual\s+stuff|intimacy|touching|kissing|to\s+(?:have\s+sex|be\s+sexual|do\s+anything\s+sexual))|(?:don'?t|do\s+not)\s+(?:be|make\s+(?:it|this))\s+(?:explicit|sexual|intimate)|(?:avoid|skip)\s+(?:any\s+)?(?:explicit|sexual|intimate|adult)\s+(?:content|details?|descriptions?|scenes?|language)|no\s+(?:explicit|sexual|adult)\s+(?:content|details?|descriptions?|scenes?)|fade\s+to\s+black|less\s+(?:explicit|sexual|intimate)|not\s+(?:too\s+)?(?:explicit|sexual|intimate)|keep\s+(?:it|this)\s+romantic|nothing\s+sexual|keep\s+(?:it|this)\s+(?:non[- ]?sexual|non[- ]?explicit|sfw|suggestive)|avoid\s+(?:sex|sexual\s+content|intimacy))\b/i;
 // Bare pacing words need context: "stop talking and kiss me" is a redirect,
 // while "stop" or "wait, I'm not comfortable" is a real pull-back.
-const PACING_PULLBACK = /^(?:please\s+)?(?:stop|pause|wait|slow\s+down)\b/i;
+const CONSENT_WITHDRAWAL = /\b(?:no\s+thanks|no\s+thank\s+you|not\s+interested|this\s+is\s+too\s+much|i(?:\s+am|'m)\s+overwhelmed|i\s+feel\s+uneasy|i(?:'d|\s+would)\s+rather\s+not|i\s+(?:need|want)\s+to\s+stop|i\s+(?:can't|cannot)\s+continue|i\s+(?:do\s+not|don't)\s+like\s+this|(?:do\s+not|don't)\s+(?:want\s+(?:you\s+to\s+)?(?:touch|kiss|continue|go\s+on)|touch|kiss|continue))\b/i;
+const PACING_PULLBACK = /^(?:please\s+)?stop\b/i;
+// A pacing word followed by an unmistakable refusal is still a boundary.
+const PACING_NO = /^\s*(?:please\s+)?(?:wait|hold\s+on|pause|stop)\s*[,;:—-]+\s*(?:no|nope|nah|not\s+now|i\s+changed\s+my\s+mind)\b/i;
 const POSITIVE_REDIRECT = /\b(?:kiss(?:es|ed|ing)?|closer|hold\s+me|stay\s+close|come\s+closer|keep\s+going|continue|again|more|don'?t\s+stop|do\s+not\s+stop|fuck(?:s|ed|ing)?|sex|touch(?:es|ed|ing)?|caress(?:es|ed|ing)?|make\s+out)\b/i;
 const STOPPED_INTIMATE_TARGET = /^(?:sex|fucking|touching|kissing|this|that|it|everything)\b/i;
 const NONINTIMATE_STOP_TARGET = /^(?:talking|asking|teasing|joking|stalling|hesitating|overthinking)\b/i;
 // Observable action-based withdrawal in asterisk narration should also win.
-const PHYSICAL_PULLBACK = /\b(?:pull(?:s|ed|ing)?\s+away|move(?:s|d|ing)?\s+away|step(?:s|ped|ping)?\s+back|push(?:es|ed|ing)?\s+(?:you|me|him|her|them)\s+away|turn(?:s|ed|ing)?\s+away|withdraw(?:s|n|ing)?|remove(?:s|d|ing)?\s+(?:your|his|her|their)\s+hand)\b/i;
+const PHYSICAL_PULLBACK = /\b(?:pull(?:s|ed|ing)?\s+away|move(?:s|d|ing)?\s+away|step(?:s|ped|ping)?\s+back|push(?:es|ed|ing)?\s+(?:(?:you|me|him|her|them)|(?:my|your|his|her|their)\s+hand)\s+away|move(?:s|d|ing)?\s+(?:(?:my|your|his|her|their)\s+hand)\s+away|turn(?:s|ed|ing)?\s+away|withdraw(?:s|n|ing)?|remove(?:s|d|ing)?\s+(?:your|his|her|their)\s+hand)\b/i;
 
 // Narration that explicitly frames the content as private cognition should not
 // by itself buy the extra mature prompt. Observable narration still counts.
@@ -84,21 +87,22 @@ function normalize(text: string): string {
   return text.replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
 }
 
-function roleplayParts(text: string): { spoken: string; narration: string; signal: string } {
+function roleplayParts(text: string): { spoken: string; narration: string; observableNarration: string; signal: string } {
   const segments = splitRoleplayInput(text);
   const spoken = normalize(segments.filter(s => s.kind === "spoken").map(s => s.text).join(" "));
   const narrationParts = segments.filter(s => s.kind === "narration").map(s => normalize(s.text)).filter(Boolean);
   const narration = normalize(narrationParts.join(" "));
-  const observableNarration = narrationParts.filter(part => !PRIVATE_NARRATION.test(part));
-  const signal = normalize([spoken, ...observableNarration].filter(Boolean).join(" "));
-  return { spoken, narration, signal };
+  const observableNarration = normalize(narrationParts.filter(part => !PRIVATE_NARRATION.test(part)).join(" "));
+  const signal = normalize([spoken, observableNarration].filter(Boolean).join(" "));
+  return { spoken, narration, observableNarration, signal };
 }
 
 function hasPullback(text: string): boolean {
-  const { spoken, narration } = roleplayParts(text);
+  const { spoken, observableNarration } = roleplayParts(text);
 
-  // Physical withdrawal in narration is an unambiguous scene-level pullback.
-  if (PHYSICAL_PULLBACK.test(narration)) return true;
+  // Physical withdrawal only counts when stated aloud or narrated as an observable action.
+  if (PHYSICAL_PULLBACK.test(observableNarration) || PHYSICAL_PULLBACK.test(spoken)) return true;
+  if (STRONG_PULLBACK.test(observableNarration) || CONSENT_WITHDRAWAL.test(observableNarration)) return true;
   if (!spoken) return false;
 
   // "don't stop" / "don't slow down" are continuations, not pull-backs.
@@ -107,10 +111,12 @@ function hasPullback(text: string): boolean {
     .replace(/\b(?:don'?t|do\s+not)\s+slow\s+down\b/gi, "continue")
     .replace(/\b(?:can'?t|cannot)\s+wait\b/gi, "eager");
 
-  if (STRONG_PULLBACK.test(protectedSpoken)) return true;
+  if (/^(?:no|nope|nah|stop|not anymore|i changed my mind)[.!…\\s]*$/i.test(protectedSpoken)) return true;
+  if (STRONG_PULLBACK.test(protectedSpoken) || CONSENT_WITHDRAWAL.test(protectedSpoken)) return true;
 
-  // A leading "stop/wait/pause/slow down" is treated as a boundary unless
-  // the same sentence clearly redirects into another welcomed intimate beat.
+  // A pacing request is not automatically a refusal. Only an explicit no
+  // after it, a strong boundary above, or a clear stop is treated as pull-back.
+  if (PACING_NO.test(protectedSpoken)) return true;
   if (PACING_PULLBACK.test(protectedSpoken)) {
     const remainder = normalize(protectedSpoken.replace(PACING_PULLBACK, "").replace(/^[,;:—-]+/, ""));
     // "stop sex/touching/this" is a boundary even though the stopped thing
@@ -135,7 +141,7 @@ export function matureSceneScore(text: string): number {
   const adultSignal = t.replace(NON_EROTIC_SEX_CONTEXT, " ");
   const anatomySignal = t.replace(NON_EROTIC_ANATOMY_CONTEXT, " ");
   if (DIRECT_ADULT.test(adultSignal)) score += 4;
-  if (ADULT_ANATOMY.test(anatomySignal)) score += 2;
+  if (!MEDICAL_AROUSAL_CONTEXT.test(t) && ADULT_ANATOMY.test(anatomySignal)) score += 2;
   if (UNDRESSING.test(t)) score += 3;
   if (STRONG_EROTIC_ACTION.test(t)) score += 3;
   if (AROUSAL.test(t)) score += 3;
@@ -163,7 +169,7 @@ export function isMatureSceneActive(args: {
   }
 
   const latestUserRaw = latestUserIndex >= 0 ? history[latestUserIndex].content : "";
-  const latestUserParts = latestUserRaw ? roleplayParts(latestUserRaw) : { spoken: "", narration: "", signal: "" };
+  const latestUserParts = latestUserRaw ? roleplayParts(latestUserRaw) : { spoken: "", narration: "", observableNarration: "", signal: "" };
   const latestUser = latestUserParts.signal;
   const continuationText = latestUserParts.spoken || latestUser;
   const directive = args.sceneDirective?.trim() ?? "";
@@ -189,14 +195,17 @@ export function isMatureSceneActive(args: {
   let strongestPrior = 0;
   let maturePriorIndex = -1;
   for (let i = 0; i < prior.length; i++) {
-    // A user pull-back inside the hold window is a hard scene-state barrier:
-    // nothing before it may reactivate from a later vague "again".
-    if (prior[i].role === "user" && hasPullback(prior[i].content)) {
+    // Assistant narration is not evidence of user intent. Only user-authored
+    // turns can establish/continue a scene or create a consent boundary.
+    if (prior[i].role !== "user") continue;
+    // A user pull-back is a hard scene-state barrier: assistant text after it
+    // cannot reactivate the scene; only a later clear user cue can do so.
+    if (hasPullback(prior[i].content)) {
       strongestPrior = 0;
       maturePriorIndex = -1;
       continue;
     }
-    const signal = prior[i].role === "user" ? roleplayParts(prior[i].content).signal : normalize(prior[i].content);
+    const signal = roleplayParts(prior[i].content).signal;
     const s = matureSceneScore(signal);
     if (s > strongestPrior) strongestPrior = s;
     if (s >= 3) maturePriorIndex = i;

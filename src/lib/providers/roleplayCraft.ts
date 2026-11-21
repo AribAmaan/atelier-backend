@@ -9,13 +9,15 @@
  * better than several overlapping lists of prohibitions, and the duplicates
  * cost input tokens on every turn.
  *
- * This is delivery craft only. It never changes who the persona is, adds no
- * content restrictions, and the adult-only / consent rules live elsewhere
- * (buildMatureEngagementBlock) and are untouched.
+ * This is delivery craft only. It never changes who the persona is. The
+ * adult-only / consent boundaries are handled separately by
+ * buildMatureEngagementBlock.
  */
 
 export const ROLEPLAY_CRAFT_RULES = `ROLEPLAY CRAFT: write the next moment of a living scene, not a summary of it.
-PRESENCE: one fresh, concrete detail this character would notice or do here (an object, a sound, the light, busy hands), through their own senses, delivered as a brief action beat or inside the line itself. Most replies carry at least one non-verbal beat (an action, an expression, a change in the setting). The user's body, thoughts and reactions stay the user's.
+PRESENCE: use one concrete detail from the character's senses and a natural action, expression, or setting change. The user's meaningful choices, thoughts, and consent stay theirs; carry forward only minor continuity implied by their action. Never invent their mood or problem from a bare greeting.
+SHAPE: fewer, fuller passages, not a chain of fragments: one flowing action or description of two to three sentences (what the character does, how it looks and feels), then a compact spoken line. A longer envelope adds a second passage, never a third short beat. Never repeat a reassurance, invitation or instruction.
+BODY: when the moment calls for it, use concrete physical detail (hands, face, eyes, posture, breath, voice, touch, clothing, the warmth or weight of contact); pick the detail that carries the moment.
 WANT: the character wants something small and immediate (an answer, closeness, space, a laugh) that colours the line; they pursue it, adapt when refused, and sometimes hide it.
 SUBTEXT: feeling shows in choices, timing and what is left unsaid; name an emotion aloud only as a real person would. Prefer an action only this character would take over a stock romance-novel reaction.
 VOICE: this person's rhythm, idiom, humour and guardedness; contractions, fragments, interruptions and trailing off, never speeches or self-analysis.

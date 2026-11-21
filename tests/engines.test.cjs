@@ -31,7 +31,8 @@ test('Choco Hazelnut is at least as strong as Chocolate and Hazelnut on every ax
   // Ideas from both engines survive in the merged notes.
   assert.match(c.voiceNotes, /unresolved threads/i);        // Chocolate
   assert.match(c.voiceNotes, /independent, persona-consistent/i); // Hazelnut
-  assert.match(c.voiceNotes, /hesitation or refusal/i);     // consent guard, both
+  const activeMaturePrompt = buildSystemPrompt({ name: 'Mira', personality: 'Adult archivist', backstory: 'A quiet archivist' }, { explicitMode: true, matureSceneActive: true, engine: c, voiceNotes: c.voiceNotes });
+  assert.match(activeMaturePrompt, /mild hesitation is not automatically a refusal/i); // consent guard lives only in the active-scene block
 });
 
 test('retired and alternate engine ids resolve to the two current engines', () => {
@@ -85,7 +86,8 @@ test('Choco Hazelnut prompt carries the merged voice notes in both context modes
       if (mode === undefined) delete process.env.HAZELNUT_COMPACT_CONTEXT; else process.env.HAZELNUT_COMPACT_CONTEXT = mode;
       const prompt = buildSystemPrompt(character, { explicitMode: true, engine, voiceNotes: engine.voiceNotes });
       assert.ok(prompt.includes(engine.voiceNotes), `full voice notes present (compact=${mode !== 'false'})`);
-      assert.match(prompt, /At Choco Hazelnut tier/);
+      assert.match(prompt, /AVAILABLE, NOT ASSUMED/);
+      assert.doesNotMatch(prompt, /MATURE SCENE — FOLLOW THE ESTABLISHED CONTEXT/);
     }
   } finally {
     if (previous === undefined) delete process.env.HAZELNUT_COMPACT_CONTEXT; else process.env.HAZELNUT_COMPACT_CONTEXT = previous;

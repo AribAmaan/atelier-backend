@@ -501,7 +501,7 @@ export function planTurnSteers(input: TurnDirectorInput): Steer[] {
     add("format_actions", "Put each physical action beat between *asterisks*, for example *I tuck a strand of hair behind my ear*, and keep spoken words plain. The last replies wrote their actions without asterisks.");
   }
   if (assistant.slice(-2).some(narratesUser)) {
-    add("agency", "Leave the user's body, feelings and reactions to the user; show only what the character does, says and can see.");
+    add("agency", "Keep the user's meaningful choices, dialogue, feelings and consent theirs; minor visible continuity directly implied by their stated action is fine, but do not assign a new consequential action.");
   }
 
   const skip = new Set(normTokens(input.characterName ?? ""));

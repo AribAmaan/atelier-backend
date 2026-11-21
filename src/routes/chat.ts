@@ -36,6 +36,7 @@ import { buildDirectorTailNote, buildRoleplayTurnGuard, formatRoleplayInput, ins
 import type { GenParams, TtsVoice } from "../lib/providers";
 import { resolveEngineForTier, normalizeMembershipTier, PREMIUM_ENGINE_ID } from "../lib/providers/engines";
 import { computeRelationshipLevel } from "../lib/relationship";
+import { isMatureSceneActive } from "../lib/providers/matureScene";
 
 const router = Router();
 
@@ -405,6 +406,18 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
   // normal path.
   const recentHistory = relevant.length <= summarizeTrigger * 2 ? relevant : relevant.slice(-recentWindow);
 
+  // Explicit mode is permission, not proof that the current scene is sexual.
+  // Evaluate the current/recent exchange on the server and only then add the
+  // stronger adult-scene instructions. This is deliberately recomputed per turn.
+  const matureSceneActive = explicitMode && isMatureSceneActive({
+    explicitMode,
+    recentHistory: recentHistory.map((m: { role: string; content: string }) => ({
+      role: m.role,
+      content: m.content,
+    })),
+    sceneDirective,
+  });
+
   // Gap between the character's last reply and the user's latest message —
   // what powers buildTimeAwarenessBlock (see its comment in providers/
   // index.ts for why this is worth computing). Pure Date math over rows
@@ -441,15 +454,16 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
       ? `h${Math.round(minutesSinceLastMessage / 60)}`
       : `d${Math.round(minutesSinceLastMessage / (60 * 24))}`;
   const promptCacheKey = createHash("sha256").update(JSON.stringify([
-    compactHazelnut ? "compact-v10-director" : "standard-v9-director", characterId, character.name,
+    compactHazelnut ? "compact-v13-adult-scene-flex" : "standard-v12-adult-scene-flex", characterId, character.name,
     character.personality, character.backstory, character.roleplayNotes, character.tagline, character.greeting,
     character.memorySummary ?? "", character.examples ?? "", engine?.id ?? "none", explicitMode,
-    spiceLevel, roleplayStyle, voiceNotes, timeGapBucket,
+    spiceLevel, roleplayStyle, voiceNotes, matureSceneActive, timeGapBucket,
   ])).digest("hex");
   let system = getCachedPrompt(promptCacheKey);
   if (!system) {
     system = buildSystemPrompt(character, {
       explicitMode,
+      matureSceneActive,
       spiceLevel,
       roleplayStyle,
       voiceNotes,

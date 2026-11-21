@@ -35,6 +35,8 @@ export type RoleplayStyle = "balanced" | "narrative" | "dialogue" | "slow_burn" 
 
 export type RoleplayPromptOptions = {
   explicitMode: boolean;
+  /** True only when the recent exchange establishes consensual adult intimacy. */
+  matureSceneActive?: boolean;
   spiceLevel?: SpiceLevel;
   roleplayStyle?: RoleplayStyle;
   /** Bespoke per-engine voice/pacing directive — see providers/engines.ts. */
@@ -295,22 +297,16 @@ function buildTimeAwarenessBlock(minutesSinceLastMessage: number | undefined, in
 }
 
 /** Shared across tiers: believable turn-taking is not a paid personality change. */
-function buildMatureEngagementBlock(explicitMode: boolean, intelligence: number): string {
-  if (!explicitMode) return "Content mode: general fictional roleplay. Keep sexual content non-explicit.";
+function buildMatureEngagementBlock(explicitMode: boolean, matureSceneActive: boolean): string {
+  if (!explicitMode) return "Content mode: general fictional roleplay; keep sexual content non-explicit.";
+  if (!matureSceneActive) {
+    return "18+ MODE — AVAILABLE, NOT ASSUMED: Let the conversation, character, and user's direction set the pace. Follow natural romantic or suggestive progression when the context supports it; do not force intimacy into an ordinary turn or require exact trigger words. Only proceed explicitly when every participant is clearly established as 18+ and able to choose freely; if any age is unknown, ambiguous, or under 18, keep the scene non-explicit.";
+  }
 
-  // Each tier line carries only what the always-present blocks do not already say.
-  // Strawberry: the small persona-led choice lives in its depth line and voice notes.
-  // Plus: the intimacy menu (moves, qualities, layered beat, direct vocabulary) lives in
-  // the engine voice notes, which are sent in every mode, so only the remainder is stated here.
-  const tier =
-    intelligence <= 7
-      ? ""
-      : " At Choco Hazelnut tier, carry emotional and physical continuity together and choose a decisive persona-led direction. The character may also be provocative, jealous, or tender when those belong to the persona and scene, and may use a charged pet name or command. Intensify, slow down, or hold tension rather than defaulting to passive agreement or immediately asking the user what happens next.";
-
-  return `MATURE MODE — ADULT FICTION
-This mode is adult-only: sexualize a scene only when every involved character is clearly 18+ and the context is consensual. For consensual adult romance and intimacy that fit the persona, engage naturally instead of becoming evasive or passive.${tier}
-Stay present when the user becomes sexually direct: carry the emotional and sensual intensity forward through voice, touch, body language, breath, posture, and the power dynamics that fit the character rather than abruptly sanitizing the scene into ordinary conversation. Do not moralize about consensual adult desire. When the user becomes sexually direct or the scene reaches sex, write it explicitly and concretely: name adult body parts and acts in the direct words the character and user would actually use, in narration as well as dialogue, instead of vague substitutes such as "the fabric," "the sensation," or "that spot." Do not fade to black, cut away, or summarize past the physical moment. Match the vocabulary the user has established; do not repeat a sexual term mechanically just to prove directness.
-Once trust, attraction, comfort, or mutual intent has been clearly established, do not replay first-contact shock, shame, or nervous permission-seeking on every turn unless a genuinely new event earns it. Avoid stock reaction loops such as repeated blushing, trembling, breath-catching, looking away, racing-heart narration, sleeve-twisting, or asking for reassurance; use at most one such micro-reaction when it is fresh and specific, then add a new choice, line, or action. After mutual intent is established, do not end every turn by asking whether the user is sure or what happens next; ask only when a new boundary or meaningful choice actually needs an answer. Respect hesitation or refusal immediately, and leave the user's consent, dialogue, feelings, and actions to them.`;
+  return `MATURE SCENE — FOLLOW THE ESTABLISHED CONTEXT
+Proceed explicitly only when every participant is clearly established as 18+ and able to choose freely; if any age is unknown, ambiguous, or under 18, keep the scene non-explicit. Read consent in context: teasing, a pause, or mild hesitation is not automatically a refusal. Treat 'wait', 'pause', and 'slow down' as pacing cues—pause or adjust the current beat as asked without treating them as automatic rejection. Neither silence nor past intimacy grants permission. A clear no/stop, pull-away, or withdrawal ends that intimate action. If willingness is genuinely unclear, pause escalation and let the moment resolve naturally. Do not sexualize coercion or incapacitation.
+Let the character, relationship, user cues, and chosen style set the pace and level of detail. Use natural, varied body language and physical continuity—posture, movement, expression, distance, touch, breath, and clothing—without formulaic reactions or repetitive check-ins. Keep the writing as brief or descriptive as the moment earns.
+Leave the user's meaningful choices, dialogue, inner feelings, and consent to them. You may carry forward minor visible continuity or a direct physical consequence of an action the user already supplied; do not assign them a new consequential action or decision.`;
 }
 
 /** Kept for callers; the craft block now carries everything this used to say. */
@@ -372,7 +368,7 @@ Write the scene reply from this persona's point of view, including any supportin
 ${ROLEPLAY_CRAFT_RULES}
 ${ROLEPLAY_INPUT_RULES}
 ${CONVERSATION_AWARENESS_RULES}
-${buildMatureEngagementBlock(Boolean(opts.explicitMode), intelligence)}
+${buildMatureEngagementBlock(Boolean(opts.explicitMode), Boolean(opts.matureSceneActive))}
 ${craftDepthLine(intelligence)}
 ${opts.voiceNotes?.trim() ? `CHOCO HAZELNUT VOICE NOTES: ${truncatePromptText(opts.voiceNotes.trim(), 1800)}\n` : ""}CHARACTER DATA: ${JSON.stringify({ name: character.name, personality: character.personality, backstory: character.backstory, notes: character.roleplayNotes || "" })}
 ${buildCharacterSetup(character)}${examples.length ? `VOICE EXAMPLES (not current events): ${JSON.stringify(examples)}\n` : ""}${opts.deferReplyGuidance ? "" : buildReplyGuidance(intelligence) + "\n"}${character.memorySummary?.trim() ? `EARLIER MEMORY (may be incomplete or outdated):\n${character.memorySummary.trim()}\n` : ""}${buildTimeAwarenessBlock(opts.minutesSinceLastMessage, intelligence)}`;
@@ -403,7 +399,7 @@ ${buildCharacterSetup(character)}${examples.length ? `VOICE EXAMPLES (not curren
     }
   }
 
-  const modeBlock = buildMatureEngagementBlock(Boolean(opts.explicitMode), intelligence);
+  const modeBlock = buildMatureEngagementBlock(Boolean(opts.explicitMode), Boolean(opts.matureSceneActive));
 
   const voiceBlock = opts.voiceNotes?.trim()
     ? `Voice notes: ${opts.voiceNotes.trim().slice(0, 1800)}\n`
