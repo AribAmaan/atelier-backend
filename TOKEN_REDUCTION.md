@@ -1,5 +1,7 @@
 # Input-token reduction (prompt de-duplication)
 
+> Follow-up in this build: the adult-scene prompt and Plus voice-note instructions have since been compacted further. The current rules now appear only in the short permission/active-scene blocks; the older table below records the earlier prompt-compression pass and is historical.
+
 Goal: fewer input tokens per reply with no instruction removed. Scope: wording only. No model, provider, sampling,
 word-ceiling, history-window, memory or billing change. No new model calls.
 

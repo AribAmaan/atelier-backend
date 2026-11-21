@@ -6,7 +6,7 @@ Brings the backend in line with the frontend (`FRONTEND_TWO_TIERS.md`): four eng
 | Engine | Tier | What it is |
 |---|---|---|
 | `strawberry` | free | Strawberry exactly as it was (intelligence 6, 50-70 words, 144 tokens, window 11 / fold at 18, temp 0.79). It takes the free slot Vanilla held, so free chats get a fuller reply than before (35 words -> 60). |
-| `choco_hazelnut` | plus | Chocolate + Hazelnut combined. Takes the higher value of every setting: intelligence 10, 105-130 words, 256 tokens, Hazelnut's sampling (0.87 / 0.95), Hazelnut's compact long-memory context and recall, Chocolate's larger verbatim window (15; fold trigger 31 so memory summaries are no more frequent than before). Voice notes, behavior ladder and mature-scene guidance merge both engines' text. The adult-only, consent and "react to hesitation or refusal immediately" rules are kept. |
+| `choco_hazelnut` | plus | Chocolate + Hazelnut combined. Takes the higher value of every setting: intelligence 10, 105-130 words, 256 tokens, Hazelnut's sampling (0.87 / 0.95), Hazelnut's compact long-memory context and recall, Chocolate's larger verbatim window (15; fold trigger 31 so memory summaries are no more frequent than before). Voice notes, behavior ladder and mature-scene guidance merge both engines' text. The 18+ boundary remains; clear refusal or withdrawal stops the intimate action, while genuine uncertainty pauses escalation without treating every hesitation as refusal. |
 
 Old ids still work, so saved browser settings and older clients keep working: `vanilla` -> `strawberry`; `chocolate`, `hazelnut`, `chocohazelnut`, `chocolate_hazelnut` -> `choco_hazelnut` (case, spaces and hyphens ignored). `custom` / unknown ids still mean manual mode.
 
