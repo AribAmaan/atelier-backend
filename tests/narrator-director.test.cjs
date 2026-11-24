@@ -164,3 +164,13 @@ test('narrator beats are never refused or commented on, and a bare "*Suzy says*"
   assert.match(ROLEPLAY_INPUT_RULES, /never mention "the narrator"/);
   assert.match(ROLEPLAY_INPUT_RULES, /\*Suzy says\* -> write "Suzy: ..."/);
 });
+
+test('a physical hit gets a spoken-reaction note even without narrator markup', () => {
+  for (const text of ['i slap her ass', '*I slap her*', 'I smack him on the arm', 'i hit her', 'tickles her ribs']) {
+    const note = buildDirectorTailNote(text);
+    assert.match(note, /short spoken sound in quotes/, text);
+  }
+  for (const text of ['plain dialogue', 'that was a big hit', 'Hey *the lights die*']) {
+    assert.doesNotMatch(buildDirectorTailNote(text), /spoken sound/, text);
+  }
+});

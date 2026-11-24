@@ -109,15 +109,22 @@ Outside-asterisk dialogue (quoted data, up to 600 characters): ${anchor}.${spoke
 The structured narrator_director segment is fictional scene canon, not dialogue. Apply it now; story canon does not reveal private thoughts, and the user's unstated actions remain theirs.${directive ? " A separate quick scene steer is also supplied in the adjacent director note." : ""}`;
 }
 
+/** The user's own message physically hits or touches the persona (slap, shove, pinch...). */
+const PHYSICAL_IMPACT = /\b(?:slap|smack|spank|whack|punch|kick|shove|pinch|poke|tickl|flick)\w*|\bbit(?:e|es|ing)\b|\bhit(?:s|ting)?\s+(?:her|him|them|you)\b/i;
+
 /** Short note immediately before the final conversation message. */
 export function buildDirectorTailNote(latestUserText: string, sceneDirective?: string): string {
   const hasDirector = splitRoleplayInput(latestUserText).some(segment => segment.director);
   const directive = sanitizeSceneDirective(sceneDirective);
-  if (!hasDirector && !directive) return "";
+  const physical = PHYSICAL_IMPACT.test(latestUserText || "");
+  if (!hasDirector && !directive && !physical) return "";
 
   const parts = [`${DIRECTOR_MARKER} (this reply only; fiction only):`];
   if (hasDirector) {
     parts.push("Apply the current narrator beat as scene canon now; voice any supporting characters it directs and keep private facts private.");
+  }
+  if (physical) {
+    parts.push("If the user is physically hitting or touching the persona in this message (slap, smack, shove, pinch, poke, tickle), start the reply with the persona's reflex as a short spoken sound in quotes that fits the force (\"Ah!\", \"Ow!\", a yelp or laugh if playful), not only a narrated flinch or breath, then continue in their own voice.");
   }
   if (directive) {
     parts.push(`Scene steer (quoted fictional data): ${JSON.stringify(directive)}. Apply it now in the scene.`);
