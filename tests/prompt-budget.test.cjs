@@ -1,0 +1,44 @@
+// Token budget for the fixed prompt (system prompt + reply envelope + per-turn guard + persona anchor) on a
+// small fixture, measured with the repo's own conservative estimator (about 1.6x the real BPE count).
+// The fixed prompt grew roughly 1.8x in five weeks without anyone deciding that; this makes growth a decision. If you add a rule
+// on purpose, raise the budget in the same change AND say what it buys. Prefer removing a duplicate first.
+// History: +75 estimated tokens (about 45 real) for the envelope's explicit word-floor sentence and the PROPORTION
+// clarification. It buys the removal of a conflict that sent most short opening replies through a second full-prompt
+// call (about 3.4k real input tokens each); it pays for itself if it avoids one top-up in roughly 70.
+// History: about +460 estimated tokens (about +290 real, ~12%) for the narrator / scene-director channel: the director
+// rules (canon, cast voicing, agency, scope) in ROLEPLAY_INPUT_RULES, a clause in the craft FRAME line, and the
+// director wording in the system-prompt persona line. The v19 perception rules and examples are kept verbatim, so
+// this is purely additive. It buys: *...* / **...** beats treated as canon, side characters (*Suzy says*) actually
+// voiced instead of the main persona answering for them, and no refusal or commentary on narrator beats.
+// History: a further ~+170 estimated tokens for the SHAPE / BODY craft lines and the reshaped envelope sentence. They buy
+// fewer, fuller passages instead of a chain of one-line beats, concrete body detail, and no invented user mood or
+// repeated reassurance when the user only greets. Word floors and ceilings are unchanged.
+// History: about +85 estimated tokens for the physical-reaction sentence in REACTION (conversationAwareness.ts). It buys an
+// instant, in-voice sound or flinch ("ah!", "ow") when the user's action physically lands on the character, instead of a flat reply.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { buildSystemPrompt } = require('../dist/lib/providers');
+const { ROLEPLAY_ENGINES } = require('../dist/lib/providers/engines');
+const { buildAwarenessTurnGuard } = require('../dist/lib/conversationAwareness');
+const { buildReplyGuidance } = require('../dist/lib/providers/replyPolicy');
+const { buildRecencyAnchor } = require('../dist/lib/providers/recencyAnchor');
+const { estimateTokens } = require('../dist/lib/hazelnutContext');
+
+const character = { name: 'Mira', personality: 'Reserved archivist who hides warmth behind dry humor.', backstory: 'Keeps the records of a coastal town.', greeting: 'The reading room is closed.', tagline: 'Archivist' };
+const BUDGETS = [
+  ['strawberry', false, true, 4560], ['strawberry', true, true, 5075],
+  ['choco_hazelnut', false, true, 4650], ['choco_hazelnut', true, true, 5400], ['choco_hazelnut', true, false, 5700],
+];
+for (const [engineId, explicit, compact, budget] of BUDGETS) {
+  test(`fixed prompt stays within ${budget} estimated tokens: ${engineId} ${explicit ? 'mature' : 'sfw'} ${compact ? 'compact' : 'standard'}`, () => {
+    const prev = process.env.HAZELNUT_COMPACT_CONTEXT;
+    if (compact) delete process.env.HAZELNUT_COMPACT_CONTEXT; else process.env.HAZELNUT_COMPACT_CONTEXT = 'false';
+    try {
+      const e = ROLEPLAY_ENGINES[engineId];
+      const text = buildSystemPrompt(character, { explicitMode: explicit, engine: e, voiceNotes: e.voiceNotes, deferReplyGuidance: true })
+        + '\n\n' + buildReplyGuidance(e.intelligence) + buildAwarenessTurnGuard([{ role: 'user', content: 'hi' }]) + '\n' + buildRecencyAnchor(character);
+      const used = estimateTokens(text);
+      assert.ok(used <= budget, `${used} > ${budget}: the fixed prompt grew; remove a duplicate or raise the budget on purpose`);
+    } finally { if (prev === undefined) delete process.env.HAZELNUT_COMPACT_CONTEXT; else process.env.HAZELNUT_COMPACT_CONTEXT = prev; }
+  });
+}
