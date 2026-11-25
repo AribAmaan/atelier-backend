@@ -15,6 +15,10 @@
 // repeated reassurance when the user only greets. Word floors and ceilings are unchanged.
 // History: about +85 estimated tokens for the physical-reaction sentence in REACTION (conversationAwareness.ts). It buys an
 // instant, in-voice sound or flinch ("ah!", "ow") when the user's action physically lands on the character, instead of a flat reply.
+// History: about +125 estimated tokens (about +80 real) for three clauses: ORDER in the craft SHAPE line, the open-name rule in
+// NO INVENTED HISTORY, and the new-cast-member clause in CAST. They buy: the spoken reaction to a slap/touch coming first
+// instead of losing to the action-first shape, no invented name for the user's character ("William"), and a person the user
+// introduces (*Ana my sister comes and says*) voiced with their own line instead of the persona answering with an invented backstory.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildSystemPrompt } = require('../dist/lib/providers');
@@ -26,7 +30,7 @@ const { estimateTokens } = require('../dist/lib/hazelnutContext');
 
 const character = { name: 'Mira', personality: 'Reserved archivist who hides warmth behind dry humor.', backstory: 'Keeps the records of a coastal town.', greeting: 'The reading room is closed.', tagline: 'Archivist' };
 const BUDGETS = [
-  ['strawberry', false, true, 4560], ['strawberry', true, true, 5075],
+  ['strawberry', false, true, 4700], ['strawberry', true, true, 5075],
   ['choco_hazelnut', false, true, 4650], ['choco_hazelnut', true, true, 5400], ['choco_hazelnut', true, false, 5700],
 ];
 for (const [engineId, explicit, compact, budget] of BUDGETS) {

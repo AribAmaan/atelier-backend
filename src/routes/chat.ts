@@ -519,7 +519,7 @@ router.post("/:characterId", asyncHandler(async (req, res) => {
     // Deterministic shape steer from the character's own recent replies
     // (opening/closing habits, stock phrases) and the size of the user's beat.
     formatTurnSteers(turnSteers);
-  const directorTailNote = buildDirectorTailNote(directorInput, sceneDirective);
+  const directorTailNote = buildDirectorTailNote(directorInput, sceneDirective, character.name);
   if (compactHazelnut) {
     const query = buildRecallQuery(relevant, sceneDirective);
     const terms = recallTerms(query);

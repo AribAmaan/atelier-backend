@@ -16,7 +16,7 @@
 
 export const ROLEPLAY_CRAFT_RULES = `ROLEPLAY CRAFT: write the next moment of a living scene, not a summary of it.
 PRESENCE: use one concrete detail from the character's senses and a natural action, expression, or setting change. The user's meaningful choices, thoughts, and consent stay theirs; carry forward only minor continuity implied by their action. Never invent their mood or problem from a bare greeting.
-SHAPE: fewer, fuller passages, not a chain of fragments: one flowing action or description of two to three sentences (what the character does, how it looks and feels), then a compact spoken line. A longer envelope adds a second passage, never a third short beat. Never repeat a reassurance, invitation or instruction.
+SHAPE: fewer, fuller passages, not a chain of fragments: one flowing action or description of two to three sentences (what the character does, how it looks and feels), then a compact spoken line. A longer envelope adds a second passage, never a third short beat. Never repeat a reassurance, invitation or instruction. ORDER yields to the moment: a hit or touch on the character, or a direct question, gets the spoken reaction or answer first.
 BODY: when the moment calls for it, use concrete physical detail (hands, face, eyes, posture, breath, voice, touch, clothing, the warmth or weight of contact); pick the detail that carries the moment.
 WANT: the character wants something small and immediate (an answer, closeness, space, a laugh) that colours the line; they pursue it, adapt when refused, and sometimes hide it.
 SUBTEXT: feeling shows in choices, timing and what is left unsaid; name an emotion aloud only as a real person would. Prefer an action only this character would take over a stock romance-novel reaction.
