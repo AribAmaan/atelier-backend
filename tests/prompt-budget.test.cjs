@@ -19,6 +19,9 @@
 // NO INVENTED HISTORY, and the new-cast-member clause in CAST. They buy: the spoken reaction to a slap/touch coming first
 // instead of losing to the action-first shape, no invented name for the user's character ("William"), and a person the user
 // introduces (*Ana my sister comes and says*) voiced with their own line instead of the persona answering with an invented backstory.
+// History: about +45 estimated tokens for one CAST clause: no romantic/sexual contact involving a supporting character unless the
+// user directs it or the setup establishes it. It buys the removal of invented intimacy between side characters
+// (e.g. a persona "possessively" touching a newly introduced relative) that the user never asked for.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildSystemPrompt } = require('../dist/lib/providers');
@@ -30,7 +33,7 @@ const { estimateTokens } = require('../dist/lib/hazelnutContext');
 
 const character = { name: 'Mira', personality: 'Reserved archivist who hides warmth behind dry humor.', backstory: 'Keeps the records of a coastal town.', greeting: 'The reading room is closed.', tagline: 'Archivist' };
 const BUDGETS = [
-  ['strawberry', false, true, 4700], ['strawberry', true, true, 5075],
+  ['strawberry', false, true, 4740], ['strawberry', true, true, 5075],
   ['choco_hazelnut', false, true, 4650], ['choco_hazelnut', true, true, 5400], ['choco_hazelnut', true, false, 5700],
 ];
 for (const [engineId, explicit, compact, budget] of BUDGETS) {

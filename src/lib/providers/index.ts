@@ -22,7 +22,7 @@ import { buildReplyGuidance, replyProfile, clampReplyToWordCeiling } from "./rep
 import { streamCompleteReply } from "./completeReply";
 import { dropRepeatedSentences } from "./replyRepeat";
 import { ROLEPLAY_CRAFT_RULES, craftDepthLine } from "./roleplayCraft";
-import { stripSpeakerLabel, stripStockCloser, closeDanglingAsterisks } from "./replyPolish";
+import { stripSpeakerLabel, stripStockCloser, closeDanglingAsterisks, restoreActionMarkup } from "./replyPolish";
 import { hazelnutContextEnabled } from "../hazelnutContext";
 import { formatRoleplayInput, ROLEPLAY_INPUT_RULES, ROLEPLAY_MEMORY_RULES } from "../roleplayInput";
 
@@ -203,6 +203,8 @@ export function cleanAssistantResponse(text: string, intelligence = 5, recentAss
   // Form-only polish: a trailing assistant-style hand-back ("What would you
   // like to do next?") is dropped when a real reply remains.
   cleaned = stripStockCloser(cleaned);
+  // If the model dropped the *action* format for the whole reply, restore it (form only).
+  cleaned = restoreActionMarkup(cleaned);
 
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 

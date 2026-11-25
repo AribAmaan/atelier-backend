@@ -115,5 +115,40 @@ export function polishReply(text: string, characterName = ""): string {
   if (!text) return text;
   let out = stripSpeakerLabel(text, characterName);
   out = stripStockCloser(out);
-  return closeDanglingAsterisks(out).trim();
+  return closeDanglingAsterisks(restoreActionMarkup(out)).trim();
+}
+
+
+/** "Ana:" or "Dr. Voss:" on its own is a speaker label, not narration. */
+const SPEAKER_LABEL = /^[\p{L}][\p{L}\p{M} .'\u2019-]{0,30}:$/u;
+
+function wrapNarrationRun(run: string): string {
+  return run.split(/(\n+)/).map(part => {
+    if (!part || /^\n+$/.test(part)) return part;
+    const core = part.trim();
+    if (!/\p{L}/u.test(core) || SPEAKER_LABEL.test(core)) return part;
+    const lead = part.match(/^\s*/)![0], trail = part.match(/\s*$/)![0];
+    return `${lead}*${core}*${trail}`;
+  }).join("");
+}
+
+/**
+ * The model sometimes drops the *action* format for a whole reply, so the client cannot italicise the
+ * narration. When a reply has no asterisks at all but is laid out as quoted dialogue (a paragraph
+ * starts with a quote), the text between the quotes is narration: wrap each such run in asterisks.
+ * Anything ambiguous (existing asterisks, unbalanced quotes, no dialogue-style paragraph) is left
+ * exactly as written. Form only: no word is added, removed or changed.
+ */
+export function restoreActionMarkup(text: string): string {
+  if (!text || text.includes("*")) return text;
+  if ((text.match(/"/g) ?? []).length % 2) return text;
+  if ((text.match(/\u201c/g) ?? []).length !== (text.match(/\u201d/g) ?? []).length) return text;
+  if (!/(^|\n)[ \t]*["\u201c]/.test(text)) return text;
+  let out = "", last = 0;
+  for (const m of text.matchAll(/"[^"]*"|\u201c[^\u201d]*\u201d/g)) {
+    const at = m.index ?? 0;
+    out += wrapNarrationRun(text.slice(last, at)) + m[0];
+    last = at + m[0].length;
+  }
+  return out + wrapNarrationRun(text.slice(last));
 }

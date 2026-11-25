@@ -39,6 +39,7 @@ const FILLER_WINDOW = 4;              // replies scanned for a pet filler word (
 const FILLER_MIN_TOTAL = 3;
 const PAST_CLAIM_WINDOW = 2;          // recent replies checked for invented past events
 const CLARIFY_MAX_WORDS = 6;          // a user turn this short that asks "what do you mean" is a clarification
+const CHOPPY_PARAGRAPHS = 6;          // paragraphs at or above this, in each of the last two replies, is a chain of fragments
 const DIRECT_QUESTION_MAX_WORDS = 14; // longer turns are usually a story with a question inside it
 
 export type UserBeat = "rapid" | "normal" | "weighty";
@@ -71,6 +72,10 @@ export function classifyUserBeat(latestUserText: string): UserBeat {
   if (total <= QUICK_BEAT_MAX_WORDS) return "rapid";
   if (total >= WEIGHTY_BEAT_WORDS || narration >= WEIGHTY_NARRATION_WORDS) return "weighty";
   return "normal";
+}
+
+function paragraphCount(text: string): number {
+  return text.split(/\n\s*\n/).filter(x => x.trim()).length;
 }
 
 export type Shape = {
@@ -498,7 +503,11 @@ export function planTurnSteers(input: TurnDirectorInput): Steer[] {
   // The model dropped the *action* format: beats are there but unmarked, so the client shows them as speech.
   const lastTwo = assistant.slice(-2).map(r => analyzeReply(r, input.characterName));
   if (lastTwo.length === 2 && lastTwo.every(x => x.unmarkedActions >= 1)) {
-    add("format_actions", "Put each physical action beat between *asterisks*, for example *I tuck a strand of hair behind my ear*, and keep spoken words plain. The last replies wrote their actions without asterisks.");
+    add("format_actions", "Put each physical action beat between *asterisks*, in the same person you already narrate in (for example *leans back, arms folded*), and keep spoken words plain. The last replies wrote their actions without asterisks.");
+  }
+  // Chains of one-line paragraphs: the model copies its own recent layout more than it obeys the craft rule.
+  if (assistant.length >= 2 && assistant.slice(-2).every(r => paragraphCount(r) >= CHOPPY_PARAGRAPHS)) {
+    add("choppy_run", "Write fewer, fuller paragraphs (three or four at most): keep an action beat and the spoken line it belongs to in one paragraph instead of giving every line its own. The last replies were chains of one-line paragraphs.");
   }
   if (assistant.slice(-2).some(narratesUser)) {
     add("agency", "Keep the user's meaningful choices, dialogue, feelings and consent theirs; minor visible continuity directly implied by their stated action is fine, but do not assign a new consequential action.");
